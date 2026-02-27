@@ -175,6 +175,9 @@ class ActivityDetector {
 class SrsPanel {
   private host: HTMLElement | null = null;
   private shadow: ShadowRoot | null = null;
+  private isDragging = false;
+  private dragOffsetX = 0;
+  private dragOffsetY = 0;
 
   mount(): void {
     if (document.getElementById(ROOT_ID)) {
@@ -185,14 +188,50 @@ class SrsPanel {
     this.host.id = ROOT_ID;
     this.host.style.position = "fixed";
     this.host.style.zIndex = "2147483647";
-    this.host.style.right = "16px";
-    this.host.style.bottom = "16px";
+    this.host.style.left = "16px";
+    this.host.style.bottom = "220px";
 
     this.shadow = this.host.attachShadow({ mode: "open" });
     this.shadow.innerHTML = this.template();
 
     document.body.appendChild(this.host);
     this.bindActions();
+    this.bindDrag();
+  }
+
+  private bindDrag(): void {
+    const header = this.shadow?.querySelector<HTMLElement>(".header");
+    if (!header || !this.host) {
+      return;
+    }
+
+    header.style.cursor = "grab";
+
+    header.addEventListener("mousedown", (event: MouseEvent) => {
+      if (!this.host) return;
+      this.isDragging = true;
+      header.style.cursor = "grabbing";
+      const rect = this.host.getBoundingClientRect();
+      this.dragOffsetX = event.clientX - rect.left;
+      this.dragOffsetY = event.clientY - rect.top;
+      event.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (event: MouseEvent) => {
+      if (!this.isDragging || !this.host) return;
+      const x = event.clientX - this.dragOffsetX;
+      const y = event.clientY - this.dragOffsetY;
+      this.host.style.left = `${x}px`;
+      this.host.style.top = `${y}px`;
+      this.host.style.right = "auto";
+      this.host.style.bottom = "auto";
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (!this.isDragging) return;
+      this.isDragging = false;
+      if (header) header.style.cursor = "grab";
+    });
   }
 
   async refresh(): Promise<void> {
@@ -381,6 +420,7 @@ class SrsPanel {
           padding: 12px 14px;
           border-bottom: 1px solid #e5e7eb;
           background: linear-gradient(135deg, #f3f9ff, #eefbf5);
+          user-select: none;
         }
         .title {
           font-size: 14px;

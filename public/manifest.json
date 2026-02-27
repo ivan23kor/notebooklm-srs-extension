@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "NotebookLM Spaced Repetition",
+  "description": "Adds spaced repetition reminders to NotebookLM learning activities.",
+  "version": "0.1.0",
+  "permissions": ["storage", "alarms", "notifications", "tabs"],
+  "host_permissions": ["https://notebooklm.google.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://notebooklm.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

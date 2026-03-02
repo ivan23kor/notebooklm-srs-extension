@@ -177,7 +177,7 @@ class SrsPanel {
   private shadow: ShadowRoot | null = null;
   private isCollapsed = false;
   private mainContainer: HTMLElement | null = null;
-  private PANEL_WIDTH = 360;
+  private PANEL_WIDTH = 180;
   private COLLAPSED_WIDTH = 48;
 
   mount(): void {
@@ -207,23 +207,27 @@ class SrsPanel {
 
   private findMainContainer(): HTMLElement | null {
     const selectors = [
-      "[class*='main-content']",
-      "[class*='content']",
-      "main",
-      "[role='main']",
+      "body > div",
+      "[class*='main']",
       "[class*='workspace']",
       "[class*='notebook']",
       "[class*='editor']",
+      "[class*='container']",
+      "main",
+      "[role='main']",
     ];
 
     for (const selector of selectors) {
-      const el = document.querySelector(selector) as HTMLElement;
-      if (el && el.offsetWidth > 200) {
-        return el;
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        if (rect.width > 300 && rect.left < 50) {
+          return el as HTMLElement;
+        }
       }
     }
 
-    return null;
+    return document.body;
   }
 
   private updatePageMargin(): void {
@@ -444,7 +448,7 @@ class SrsPanel {
           display: block;
         }
         .panel {
-          width: 360px;
+          width: 180px;
           height: calc(100vh - 64px);
           overflow: hidden;
           display: flex;
@@ -464,10 +468,10 @@ class SrsPanel {
           display: none;
         }
         .drag-handle {
-          padding: 10px 12px;
+          padding: 6px 8px;
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 6px;
           border-bottom: 1px solid;
           user-select: none;
           flex-shrink: 0;

@@ -175,10 +175,10 @@ class ActivityDetector {
 class SrsPanel {
   private host: HTMLElement | null = null;
   private shadow: ShadowRoot | null = null;
-  private isDragging = false;
-  private dragOffsetX = 0;
-  private dragOffsetY = 0;
   private isCollapsed = false;
+  private mainContainer: HTMLElement | null = null;
+  private PANEL_WIDTH = 360;
+  private COLLAPSED_WIDTH = 48;
 
   mount(): void {
     if (document.getElementById(ROOT_ID)) {
@@ -188,52 +188,54 @@ class SrsPanel {
     this.host = document.createElement("div");
     this.host.id = ROOT_ID;
     this.host.style.position = "fixed";
-    this.host.style.zIndex = "2147483647";
+    this.host.style.zIndex = "1";
     this.host.style.top = "64px";
     this.host.style.left = "0";
+    this.host.style.height = "calc(100vh - 64px)";
 
     this.shadow = this.host.attachShadow({ mode: "open" });
     this.shadow.innerHTML = this.template();
 
     document.body.appendChild(this.host);
+
+    this.mainContainer = this.findMainContainer();
+    this.updatePageMargin();
+
     this.bindActions();
-    this.bindDrag();
     this.bindThemeObserver();
   }
 
-  private bindDrag(): void {
-    const header = this.shadow?.querySelector<HTMLElement>(".drag-handle");
-    if (!header || !this.host) {
-      return;
+  private findMainContainer(): HTMLElement | null {
+    const selectors = [
+      "[class*='main-content']",
+      "[class*='content']",
+      "main",
+      "[role='main']",
+      "[class*='workspace']",
+      "[class*='notebook']",
+      "[class*='editor']",
+    ];
+
+    for (const selector of selectors) {
+      const el = document.querySelector(selector) as HTMLElement;
+      if (el && el.offsetWidth > 200) {
+        return el;
+      }
     }
 
-    header.style.cursor = "grab";
+    return null;
+  }
 
-    header.addEventListener("mousedown", (event: MouseEvent) => {
-      if (!this.host) return;
-      this.isDragging = true;
-      header.style.cursor = "grabbing";
-      const rect = this.host.getBoundingClientRect();
-      this.dragOffsetX = event.clientX - rect.left;
-      this.dragOffsetY = event.clientY - rect.top;
-      event.preventDefault();
-    });
+  private updatePageMargin(): void {
+    const margin = this.isCollapsed ? this.COLLAPSED_WIDTH : this.PANEL_WIDTH;
 
-    document.addEventListener("mousemove", (event: MouseEvent) => {
-      if (!this.isDragging || !this.host) return;
-      const x = event.clientX - this.dragOffsetX;
-      const y = event.clientY - this.dragOffsetY;
-      this.host.style.left = `${x}px`;
-      this.host.style.top = `${y}px`;
-      this.host.style.right = "auto";
-      this.host.style.bottom = "auto";
-    });
-
-    document.addEventListener("mouseup", () => {
-      if (!this.isDragging) return;
-      this.isDragging = false;
-      if (header) header.style.cursor = "grab";
-    });
+    if (this.mainContainer) {
+      this.mainContainer.style.marginLeft = `${margin}px`;
+      this.mainContainer.style.transition = "margin-left 0.2s ease";
+    } else {
+      document.body.style.marginLeft = `${margin}px`;
+      document.body.style.transition = "margin-left 0.2s ease";
+    }
   }
 
   private bindThemeObserver(): void {
@@ -259,6 +261,7 @@ class SrsPanel {
     if (this.host) {
       this.host.setAttribute("data-collapsed", String(this.isCollapsed));
     }
+    this.updatePageMargin();
   }
 
   async refresh(): Promise<void> {

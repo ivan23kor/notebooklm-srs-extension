@@ -178,6 +178,7 @@ class SrsPanel {
   private isDragging = false;
   private dragOffsetX = 0;
   private dragOffsetY = 0;
+  private isCollapsed = false;
 
   mount(): void {
     if (document.getElementById(ROOT_ID)) {
@@ -188,8 +189,8 @@ class SrsPanel {
     this.host.id = ROOT_ID;
     this.host.style.position = "fixed";
     this.host.style.zIndex = "2147483647";
-    this.host.style.left = "16px";
-    this.host.style.bottom = "220px";
+    this.host.style.top = "64px";
+    this.host.style.left = "0";
 
     this.shadow = this.host.attachShadow({ mode: "open" });
     this.shadow.innerHTML = this.template();
@@ -197,10 +198,11 @@ class SrsPanel {
     document.body.appendChild(this.host);
     this.bindActions();
     this.bindDrag();
+    this.bindThemeObserver();
   }
 
   private bindDrag(): void {
-    const header = this.shadow?.querySelector<HTMLElement>(".header");
+    const header = this.shadow?.querySelector<HTMLElement>(".drag-handle");
     if (!header || !this.host) {
       return;
     }
@@ -234,6 +236,31 @@ class SrsPanel {
     });
   }
 
+  private bindThemeObserver(): void {
+    const updateTheme = () => {
+      const isDark = document.documentElement.classList.contains("dark") ||
+                     document.body.classList.contains("dark") ||
+                     window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (this.host) {
+        this.host.setAttribute("data-theme", isDark ? "dark" : "light");
+      }
+    };
+
+    updateTheme();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateTheme);
+
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  private toggleCollapse(): void {
+    this.isCollapsed = !this.isCollapsed;
+    if (this.host) {
+      this.host.setAttribute("data-collapsed", String(this.isCollapsed));
+    }
+  }
+
   async refresh(): Promise<void> {
     if (!this.shadow) {
       return;
@@ -257,6 +284,7 @@ class SrsPanel {
     const refreshButton = this.shadow.querySelector<HTMLButtonElement>("#srs-refresh");
     const saveIntervalsButton = this.shadow.querySelector<HTMLButtonElement>("#srs-save-intervals");
     const clearButton = this.shadow.querySelector<HTMLButtonElement>("#srs-clear-all");
+    const collapseButton = this.shadow.querySelector<HTMLButtonElement>("#srs-collapse");
 
     refreshButton?.addEventListener("click", () => {
       void this.refresh();
@@ -272,6 +300,10 @@ class SrsPanel {
         return;
       }
       void this.clearAll();
+    });
+
+    collapseButton?.addEventListener("click", () => {
+      this.toggleCollapse();
     });
 
     this.shadow.addEventListener("click", (event) => {
@@ -405,42 +437,138 @@ class SrsPanel {
   private template(): string {
     return `
       <style>
+        :host {
+          display: block;
+        }
         .panel {
           width: 360px;
-          max-height: 80vh;
-          overflow: auto;
-          border-radius: 12px;
-          border: 1px solid #d8dee9;
-          background: #fbfcfe;
-          box-shadow: 0 12px 32px rgba(33, 45, 72, 0.24);
+          height: calc(100vh - 64px);
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
           font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
-          color: #111827;
+          transition: width 0.2s ease;
+          box-shadow: 2px 0 12px rgba(0, 0, 0, 0.1);
         }
-        .header {
-          padding: 12px 14px;
-          border-bottom: 1px solid #e5e7eb;
-          background: linear-gradient(135deg, #f3f9ff, #eefbf5);
+        :host([data-theme="dark"]) .panel {
+          box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
+        }
+        :host([data-collapsed="true"]) .panel {
+          width: 48px;
+        }
+        :host([data-collapsed="true"]) .panel-body,
+        :host([data-collapsed="true"]) .panel-footer {
+          display: none;
+        }
+        .drag-handle {
+          padding: 10px 12px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          border-bottom: 1px solid;
           user-select: none;
+          flex-shrink: 0;
+        }
+        :host([data-theme="light"]) .drag-handle {
+          background: #f8fafc;
+          border-color: #e2e8f0;
+        }
+        :host([data-theme="dark"]) .drag-handle {
+          background: #202124;
+          border-color: #3c4043;
+        }
+        :host([data-collapsed="true"]) .drag-handle {
+          justify-content: center;
+          padding: 10px;
+        }
+        .drag-handle .title-group {
+          flex: 1;
+          min-width: 0;
+        }
+        :host([data-collapsed="true"]) .drag-handle .title-group {
+          display: none;
         }
         .title {
-          font-size: 14px;
-          font-weight: 700;
+          font-size: 13px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        :host([data-theme="light"]) .title {
+          color: #0f172a;
+        }
+        :host([data-theme="dark"]) .title {
+          color: #e8eaed;
         }
         .meta {
-          font-size: 12px;
-          color: #4b5563;
-          margin-top: 4px;
+          font-size: 11px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        :host([data-theme="light"]) .meta {
+          color: #64748b;
+        }
+        :host([data-theme="dark"]) .meta {
+          color: #9aa0a6;
+        }
+        .collapse-btn {
+          width: 28px;
+          height: 28px;
+          border: none;
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        :host([data-theme="light"]) .collapse-btn {
+          background: #e2e8f0;
+          color: #475569;
+        }
+        :host([data-theme="light"]) .collapse-btn:hover {
+          background: #cbd5e1;
+        }
+        :host([data-theme="dark"]) .collapse-btn {
+          background: #303134;
+          color: #e8eaed;
+        }
+        :host([data-theme="dark"]) .collapse-btn:hover {
+          background: #3c4043;
+        }
+        .panel-body {
+          flex: 1;
+          overflow-y: auto;
+        }
+        :host([data-theme="light"]) .panel-body {
+          background: #ffffff;
+        }
+        :host([data-theme="dark"]) .panel-body {
+          background: #1f1f1f;
         }
         .section {
-          padding: 10px 14px;
-          border-bottom: 1px solid #f0f2f6;
+          padding: 12px;
+          border-bottom: 1px solid;
+        }
+        :host([data-theme="light"]) .section {
+          border-color: #f1f5f9;
+        }
+        :host([data-theme="dark"]) .section {
+          border-color: #2d2e30;
         }
         .section h4 {
           margin: 0 0 8px;
-          font-size: 12px;
+          font-size: 11px;
           text-transform: uppercase;
-          letter-spacing: 0.03em;
-          color: #374151;
+          letter-spacing: 0.05em;
+        }
+        :host([data-theme="light"]) .section h4 {
+          color: #64748b;
+        }
+        :host([data-theme="dark"]) .section h4 {
+          color: #9aa0a6;
         }
         ul {
           list-style: none;
@@ -449,44 +577,91 @@ class SrsPanel {
         }
         li {
           padding: 8px;
-          border: 1px solid #e5e7eb;
+          border: 1px solid;
           border-radius: 8px;
-          background: white;
           margin-bottom: 8px;
+        }
+        :host([data-theme="light"]) li {
+          background: #ffffff;
+          border-color: #e2e8f0;
+        }
+        :host([data-theme="dark"]) li {
+          background: #2d2e30;
+          border-color: #3c4043;
         }
         .empty {
           border-style: dashed;
-          color: #6b7280;
-          background: #f9fafb;
+          font-size: 12px;
+        }
+        :host([data-theme="light"]) .empty {
+          color: #94a3b8;
+          background: #f8fafc;
+        }
+        :host([data-theme="dark"]) .empty {
+          color: #5f6368;
+          background: #2d2e30;
         }
         .line1 {
-          font-size: 13px;
+          font-size: 12px;
           font-weight: 600;
+        }
+        :host([data-theme="light"]) .line1 {
+          color: #0f172a;
+        }
+        :host([data-theme="dark"]) .line1 {
+          color: #e8eaed;
         }
         .line2 {
           margin-top: 4px;
-          font-size: 12px;
-          color: #4b5563;
+          font-size: 11px;
+        }
+        :host([data-theme="light"]) .line2 {
+          color: #64748b;
+        }
+        :host([data-theme="dark"]) .line2 {
+          color: #9aa0a6;
         }
         .line3 {
-          margin-top: 7px;
+          margin-top: 6px;
           display: flex;
-          gap: 8px;
-          align-items: center;
+          gap: 6px;
         }
         .line3 a {
-          font-size: 12px;
-          color: #0f62fe;
+          font-size: 11px;
           text-decoration: none;
+          border-radius: 4px;
+          padding: 3px 6px;
+        }
+        :host([data-theme="light"]) .line3 a {
+          color: #0369a1;
+          background: #e0f2fe;
+        }
+        :host([data-theme="dark"]) .line3 a {
+          color: #8ab4f8;
+          background: #1f1f1f;
         }
         .line3 button {
-          font-size: 12px;
-          border: 1px solid #fca5a5;
-          background: #fff1f2;
-          color: #9f1239;
-          border-radius: 6px;
-          padding: 2px 8px;
+          font-size: 11px;
+          border: 1px solid;
+          border-radius: 4px;
+          padding: 3px 6px;
           cursor: pointer;
+        }
+        :host([data-theme="light"]) .line3 button {
+          background: #fef2f2;
+          border-color: #fca5a5;
+          color: #be123c;
+        }
+        :host([data-theme="light"]) .line3 button:hover {
+          background: #fee2e2;
+        }
+        :host([data-theme="dark"]) .line3 button {
+          background: #3c2b2b;
+          border-color: #5f4b4b;
+          color: #f28b82;
+        }
+        :host([data-theme="dark"]) .line3 button:hover {
+          background: #5f4b4b;
         }
         .controls {
           display: grid;
@@ -494,64 +669,113 @@ class SrsPanel {
         }
         .controls .row {
           display: flex;
-          gap: 8px;
+          gap: 6px;
         }
         input {
           flex: 1;
-          border: 1px solid #d1d5db;
-          border-radius: 8px;
+          border: 1px solid;
+          border-radius: 6px;
           padding: 6px 8px;
           font-size: 12px;
         }
+        :host([data-theme="light"]) input {
+          background: #ffffff;
+          border-color: #cbd5e1;
+          color: #0f172a;
+        }
+        :host([data-theme="light"]) input::placeholder {
+          color: #94a3b8;
+        }
+        :host([data-theme="dark"]) input {
+          background: #2d2e30;
+          border-color: #3c4043;
+          color: #e8eaed;
+        }
+        :host([data-theme="dark"]) input::placeholder {
+          color: #5f6368;
+        }
         button.main {
-          border: 1px solid #bfdbfe;
-          background: #eff6ff;
-          color: #1d4ed8;
-          border-radius: 8px;
-          padding: 6px 8px;
+          border: 1px solid;
+          border-radius: 6px;
+          padding: 6px 10px;
           font-size: 12px;
           cursor: pointer;
         }
-        .footer {
-          padding: 8px 14px;
-          font-size: 11px;
-          color: #6b7280;
+        :host([data-theme="light"]) button.main {
+          background: #eff6ff;
+          border-color: #93c5fd;
+          color: #1d4ed8;
+        }
+        :host([data-theme="light"]) button.main:hover {
+          background: #dbeafe;
+        }
+        :host([data-theme="dark"]) button.main {
+          background: #1f1f1f;
+          border-color: #5f6368;
+          color: #8ab4f8;
+        }
+        :host([data-theme="dark"]) button.main:hover {
+          background: #2d2e30;
+        }
+        .panel-footer {
+          padding: 8px 12px;
+          font-size: 10px;
+          border-top: 1px solid;
+        }
+        :host([data-theme="light"]) .panel-footer {
+          color: #94a3b8;
+          background: #f8fafc;
+          border-color: #e2e8f0;
+        }
+        :host([data-theme="dark"]) .panel-footer {
+          color: #9aa0a6;
+          background: #202124;
+          border-color: #3c4043;
         }
       </style>
       <div class="panel">
-        <div class="header">
-          <div class="title">NotebookLM Spaced Repetition</div>
-          <div class="meta">Tracked timelines: <span id="srs-total">0</span></div>
-        </div>
-
-        <div class="section controls">
-          <h4>Intervals (days)</h4>
-          <div class="row">
-            <input id="srs-intervals" type="text" placeholder="1, 7, 14, 30" />
-            <button class="main" id="srs-save-intervals">Save</button>
+        <div class="drag-handle">
+          <div class="title-group">
+            <div class="title">NotebookLM Spaced Repetition</div>
+            <div class="meta">Tracked: <span id="srs-total">0</span></div>
           </div>
-          <div class="row">
-            <button class="main" id="srs-refresh">Refresh</button>
-            <button class="main" id="srs-clear-all">Clear All</button>
+          <button class="collapse-btn" id="srs-collapse" title="Toggle panel">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="panel-body">
+          <div class="section controls">
+            <h4>Intervals (days)</h4>
+            <div class="row">
+              <input id="srs-intervals" type="text" placeholder="1, 7, 14, 30" />
+              <button class="main" id="srs-save-intervals">Save</button>
+            </div>
+            <div class="row">
+              <button class="main" id="srs-refresh">Refresh</button>
+              <button class="main" id="srs-clear-all">Clear All</button>
+            </div>
+          </div>
+
+          <div class="section">
+            <h4>Due Now</h4>
+            <ul id="srs-due"></ul>
+          </div>
+
+          <div class="section">
+            <h4>Overdue</h4>
+            <ul id="srs-overdue"></ul>
+          </div>
+
+          <div class="section">
+            <h4>Upcoming</h4>
+            <ul id="srs-upcoming"></ul>
           </div>
         </div>
 
-        <div class="section">
-          <h4>Due Now</h4>
-          <ul id="srs-due"></ul>
-        </div>
-
-        <div class="section">
-          <h4>Overdue</h4>
-          <ul id="srs-overdue"></ul>
-        </div>
-
-        <div class="section">
-          <h4>Upcoming</h4>
-          <ul id="srs-upcoming"></ul>
-        </div>
-
-        <div class="footer" id="srs-status">Ready</div>
+        <div class="panel-footer" id="srs-status">Ready</div>
       </div>
     `;
   }

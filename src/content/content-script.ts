@@ -25,12 +25,117 @@ async function start(): Promise<void> {
   await panel.refresh();
 }
 
+class FloatingCompleteButton {
+  private host: HTMLElement | null = null;
+  private shadow: ShadowRoot | null = null;
+  private currentType: ActivityType | null = null;
+  private onManualComplete: ((type: ActivityType) => Promise<void>) | null = null;
+
+  constructor(onComplete: (type: ActivityType) => Promise<void>) {
+    this.onManualComplete = onComplete;
+  }
+
+  mount(): void {
+    if (document.getElementById("notebooklm-srs-float-btn")) {
+      return;
+    }
+
+    this.host = document.createElement("div");
+    this.host.id = "notebooklm-srs-float-btn";
+    this.host.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:9999;";
+    this.host.innerHTML = this.template();
+
+    document.body.appendChild(this.host);
+    this.shadow = this.host.shadowRoot ?? null;
+    if (this.shadow) {
+      const button = this.shadow.querySelector<HTMLButtonElement>("#srs-float-complete");
+      button?.addEventListener("click", () => {
+        if (this.currentType && this.onManualComplete) {
+          void this.onManualComplete(this.currentType);
+        }
+      });
+    }
+    this.hide();
+  }
+
+  show(type: ActivityType): void {
+    this.currentType = type;
+    if (this.host) {
+      this.host.style.display = "block";
+      const label = this.shadow?.querySelector("#srs-float-label");
+      if (label) {
+        label.textContent = `Mark ${type} complete`;
+      }
+    }
+  }
+
+  hide(): void {
+    if (this.host) {
+      this.host.style.display = "none";
+    }
+  }
+
+  private template(): string {
+    return `
+      <style>
+        :host {
+          display: block;
+        }
+        .float-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          border-radius: 24px;
+          border: none;
+          cursor: pointer;
+          font-family: ui-sans-serif, system-ui, sans-serif;
+          font-size: 13px;
+          font-weight: 500;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .float-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+        }
+        @media (prefers-color-scheme: dark) {
+          .float-btn {
+            background: #8ab4f8;
+            color: #202124;
+          }
+        }
+        @media (prefers-color-scheme: light) {
+          .float-btn {
+            background: #2563eb;
+            color: #ffffff;
+          }
+        }
+      </style>
+      <button class="float-btn" id="srs-float-complete">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span id="srs-float-label">Mark complete</span>
+      </button>
+    `;
+  }
+}
+
 class ActivityDetector {
   onCompletion: ((event: ActivityCompletedEvent) => Promise<void>) | null = null;
   private observer: MutationObserver | null = null;
   private lastEmitAt: Record<string, number> = {};
+  private floatButton: FloatingCompleteButton | null = null;
+
+  constructor() {
+    this.floatButton = new FloatingCompleteButton(async (type) => {
+      this.emit(type, "manual-float");
+    });
+  }
 
   start(): void {
+    this.floatButton.mount();
     this.bindAudioListeners();
     this.observer = new MutationObserver(() => {
       this.scan("mutation");
@@ -74,6 +179,12 @@ class ActivityDetector {
       if (this.isCompletionSignal(type, text)) {
         this.emit(type, `${signal}-keyword`);
       }
+    }
+
+    if (activityTypes.length > 0) {
+      this.floatButton?.show(activityTypes[0]);
+    } else {
+      this.floatButton?.hide();
     }
   }
 
@@ -292,6 +403,9 @@ class SrsPanel {
     const saveIntervalsButton = this.shadow.querySelector<HTMLButtonElement>("#srs-save-intervals");
     const clearButton = this.shadow.querySelector<HTMLButtonElement>("#srs-clear-all");
     const collapseButton = this.shadow.querySelector<HTMLButtonElement>("#srs-collapse");
+    const completeQuizButton = this.shadow.querySelector<HTMLButtonElement>("#srs-complete-quiz");
+    const completeFlashcardsButton = this.shadow.querySelector<HTMLButtonElement>("#srs-complete-flashcards");
+    const completePodcastButton = this.shadow.querySelector<HTMLButtonElement>("#srs-complete-podcast");
 
     refreshButton?.addEventListener("click", () => {
       void this.refresh();
@@ -313,6 +427,18 @@ class SrsPanel {
       this.toggleCollapse();
     });
 
+    completeQuizButton?.addEventListener("click", () => {
+      void this.manualComplete("quiz");
+    });
+
+    completeFlashcardsButton?.addEventListener("click", () => {
+      void this.manualComplete("flashcards");
+    });
+
+    completePodcastButton?.addEventListener("click", () => {
+      void this.manualComplete("podcast");
+    });
+
     this.shadow.addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) {
@@ -320,11 +446,19 @@ class SrsPanel {
       }
 
       const deleteId = target.dataset.deleteTimeline;
-      if (!deleteId) {
+      if (deleteId) {
+        event.stopPropagation();
+        void this.deleteTimeline(deleteId);
         return;
       }
 
-      void this.deleteTimeline(deleteId);
+      const card = (target as HTMLElement).closest<HTMLElement>("li[data-open-url]");
+      if (card) {
+        const url = card.dataset.openUrl;
+        if (url) {
+          window.open(url, "_blank");
+        }
+      }
     });
   }
 
@@ -382,6 +516,24 @@ class SrsPanel {
     this.renderDashboard(response.data);
   }
 
+  private async manualComplete(activityType: ActivityType): Promise<void> {
+    const contentTitle = deriveContentTitle(activityType);
+    const contentItemKey = deriveContentItemKey(activityType, contentTitle);
+
+    const event: ActivityCompletedEvent = {
+      activityType,
+      contentItemKey,
+      contentTitle,
+      sourceUrl: location.href,
+      detectedSignal: "manual",
+      occurredAt: Date.now()
+    };
+
+    await sendMessage({ type: "activity.completed", payload: event });
+    await this.refresh();
+    this.setStatus(`Marked ${activityType} complete.`);
+  }
+
   private renderDashboard(data: DashboardState): void {
     if (!this.shadow) {
       return;
@@ -418,11 +570,10 @@ class SrsPanel {
     element.innerHTML = items
       .map(
         (item) =>
-          `<li>
+          `<li data-open-url="${escapeHtml(item.sourceUrl)}">
             <div class="line1">${escapeHtml(item.contentTitle)}</div>
             <div class="line2">${item.activityType} · due ${new Date(item.nextDueAt).toLocaleString()}</div>
             <div class="line3">
-              <a href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">Open</a>
               <button data-delete-timeline="${escapeHtml(item.id)}">Delete</button>
             </div>
           </li>`
@@ -587,14 +738,27 @@ class SrsPanel {
           border: 1px solid;
           border-radius: 8px;
           margin-bottom: 8px;
+          cursor: pointer;
+          transition: background 0.15s, transform 0.1s;
+        }
+        li:hover {
+          transform: translateY(-1px);
         }
         :host([data-theme="light"]) li {
           background: #ffffff;
           border-color: #e2e8f0;
         }
+        :host([data-theme="light"]) li:hover {
+          background: #f8fafc;
+          border-color: #93c5fd;
+        }
         :host([data-theme="dark"]) li {
           background: #2d2e30;
           border-color: #3c4043;
+        }
+        :host([data-theme="dark"]) li:hover {
+          background: #3c4043;
+          border-color: #8ab4f8;
         }
         .empty {
           border-style: dashed;
@@ -754,6 +918,14 @@ class SrsPanel {
         </div>
 
         <div class="panel-body">
+          <div class="section controls">
+            <h4>Manual Complete</h4>
+            <div class="row">
+              <button class="main" id="srs-complete-quiz">Quiz</button>
+              <button class="main" id="srs-complete-flashcards">Cards</button>
+              <button class="main" id="srs-complete-podcast">Podcast</button>
+            </div>
+          </div>
           <div class="section controls">
             <h4>Intervals (days)</h4>
             <div class="row">

@@ -1,4 +1,3 @@
-import { DETECTION_DEBOUNCE_MS } from "../shared/constants";
 import type {
   ActivityCompletedEvent,
   ActivityType,
@@ -18,348 +17,11 @@ function srsLog(...args: unknown[]): void {
 
 async function start(): Promise<void> {
   srsLog("init", location.href);
-  const detector = new ActivityDetector();
   const panel = new SrsPanel();
   panel.mount();
   srsLog("panel mounted");
-
-  detector.onCompletion = async (event) => {
-    srsLog("completion", event.activityType, event.detectedSignal);
-    await sendMessage({ type: "activity.completed", payload: event });
-    await panel.refresh();
-  };
-
-  detector.start();
-  srsLog("detector started");
   await panel.refresh();
   srsLog("ready");
-}
-
-class FloatingCompleteButton {
-  private host: HTMLElement | null = null;
-  private shadow: ShadowRoot | null = null;
-  private currentType: ActivityType | null = null;
-  private onManualComplete: ((type: ActivityType) => Promise<void>) | null = null;
-  private isSubmitting = false;
-  private feedbackResetTimer: number | null = null;
-
-  constructor(onComplete: (type: ActivityType) => Promise<void>) {
-    this.onManualComplete = onComplete;
-  }
-
-  mount(): void {
-    if (document.getElementById("notebooklm-srs-float-btn")) {
-      return;
-    }
-
-    this.host = document.createElement("div");
-    this.host.id = "notebooklm-srs-float-btn";
-    this.host.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:9999;";
-    this.shadow = this.host.attachShadow({ mode: "open" });
-    this.shadow.innerHTML = this.template();
-
-    document.body.appendChild(this.host);
-    {
-      const button = this.shadow.querySelector<HTMLButtonElement>("#srs-float-complete");
-      button?.addEventListener("click", async () => {
-        if (!this.currentType || !this.onManualComplete || this.isSubmitting) {
-          return;
-        }
-        this.setButtonState("loading");
-        this.isSubmitting = true;
-        try {
-          await this.onManualComplete(this.currentType);
-          this.setButtonState("success");
-        } catch {
-          this.setButtonState("idle");
-        } finally {
-          this.isSubmitting = false;
-        }
-      });
-    }
-    this.hide();
-  }
-
-  show(type: ActivityType): void {
-    this.currentType = type;
-    if (this.host) {
-      this.host.style.display = "block";
-      if (!this.isSubmitting) {
-        this.setButtonState("idle");
-      }
-    }
-  }
-
-  hide(): void {
-    if (this.host) {
-      this.host.style.display = "none";
-    }
-  }
-
-  private template(): string {
-    return `
-      <style>
-        :host {
-          display: block;
-        }
-        .float-btn {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 10px 16px;
-          border-radius: 24px;
-          border: none;
-          cursor: pointer;
-          font-family: ui-sans-serif, system-ui, sans-serif;
-          font-size: 13px;
-          font-weight: 500;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-          transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .float-btn:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 6px 16px rgba(0,0,0,0.2);
-        }
-        @media (prefers-color-scheme: dark) {
-          .float-btn {
-            background: #8ab4f8;
-            color: #202124;
-          }
-        }
-        @media (prefers-color-scheme: light) {
-          .float-btn {
-            background: #2563eb;
-            color: #ffffff;
-          }
-        }
-      </style>
-      <button class="float-btn" id="srs-float-complete">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <polyline points="20 6 9 17 4 12"/>
-        </svg>
-        <span id="srs-float-label">Mark complete</span>
-      </button>
-    `;
-  }
-
-  private setButtonState(state: "idle" | "loading" | "success"): void {
-    const button = this.shadow?.querySelector<HTMLButtonElement>("#srs-float-complete");
-    const label = this.shadow?.querySelector<HTMLElement>("#srs-float-label");
-    if (!button || !label) {
-      return;
-    }
-
-    if (this.feedbackResetTimer) {
-      window.clearTimeout(this.feedbackResetTimer);
-      this.feedbackResetTimer = null;
-    }
-
-    if (state === "loading") {
-      button.disabled = true;
-      button.style.opacity = "0.8";
-      label.textContent = "Saving…";
-      return;
-    }
-
-    button.disabled = false;
-    button.style.opacity = "1";
-
-    if (state === "success") {
-      label.textContent = "Marked ✓";
-      this.feedbackResetTimer = window.setTimeout(() => {
-        this.setButtonState("idle");
-      }, 1200);
-      return;
-    }
-
-    label.textContent = this.currentType ? `Mark ${this.currentType} complete` : "Mark complete";
-  }
-}
-
-class ActivityDetector {
-  onCompletion: ((event: ActivityCompletedEvent) => Promise<void>) | null = null;
-  private observer: MutationObserver | null = null;
-  private lastEmitAt: Record<string, number> = {};
-  private floatButton: FloatingCompleteButton | null = null;
-  private scanPending = false;
-
-  constructor() {
-    this.floatButton = new FloatingCompleteButton(async (type) => {
-      await this.emitAndWait(type, "manual-float");
-    });
-  }
-
-  start(): void {
-    if (!this.floatButton) return;
-    this.floatButton.mount();
-    this.bindAudioListeners();
-    this.observer = new MutationObserver(() => {
-      this.scheduleScan("mutation");
-    });
-    this.observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true
-    });
-
-    window.addEventListener("popstate", () => this.scheduleScan("navigation"));
-    window.addEventListener("hashchange", () => this.scheduleScan("navigation"));
-    setInterval(() => this.scan("heartbeat"), 15000);
-    this.scan("initial");
-  }
-
-  private scheduleScan(signal: string): void {
-    if (this.scanPending) {
-      return;
-    }
-    this.scanPending = true;
-    setTimeout(() => {
-      this.scanPending = false;
-      this.scan(signal);
-    }, 500);
-  }
-
-  private bindAudioListeners(): void {
-    document.addEventListener(
-      "ended",
-      (event) => {
-        const target = event.target;
-        if (!(target instanceof HTMLAudioElement || target instanceof HTMLVideoElement)) {
-          return;
-        }
-
-        if (!this.detectActivityType().includes("podcast")) {
-          return;
-        }
-
-        this.emit("podcast", "media-ended");
-      },
-      true
-    );
-  }
-
-  private scan(signal: string): void {
-    const activityTypes = this.detectActivityType();
-
-    if (activityTypes.length === 0) {
-      if (this.floatButton) {
-        this.floatButton.hide();
-      }
-      return;
-    }
-
-    // Only read innerText when we have a detected activity type (expensive reflow)
-    const text = this.safeTextSnapshot();
-    for (const type of activityTypes) {
-      if (this.isCompletionSignal(type, text)) {
-        srsLog("signal", type, signal);
-        this.emit(type, `${signal}-keyword`);
-      }
-    }
-
-    if (this.floatButton) {
-      this.floatButton.show(activityTypes[0]!);
-    }
-  }
-
-  private detectActivityType(): ActivityType[] {
-    // Fast path: check URL and title only (no DOM access)
-    const value = `${location.pathname} ${location.search} ${document.title}`.toLowerCase();
-    const matches: ActivityType[] = [];
-
-    if (value.includes("quiz")) {
-      matches.push("quiz");
-    }
-
-    if (value.includes("flashcard") || value.includes("cards")) {
-      matches.push("flashcards");
-    }
-
-    if (value.includes("podcast") || value.includes("audio")) {
-      matches.push("podcast");
-    }
-
-    // Only fall back to body text scan on heartbeat (every 15s),
-    // never on mutation — innerText forces synchronous reflow
-    return matches;
-  }
-
-  private safeTextSnapshot(): string {
-    const slice = document.body?.innerText?.slice(0, 10000) ?? "";
-    return slice.toLowerCase();
-  }
-
-  private isCompletionSignal(type: ActivityType, text: string): boolean {
-    if (type === "quiz") {
-      return containsAny(text, [
-        "quiz complete",
-        "quiz completed",
-        "your score",
-        "final score",
-        "review answers"
-      ]);
-    }
-
-    if (type === "flashcards") {
-      return containsAny(text, [
-        "flashcards complete",
-        "session complete",
-        "finished reviewing",
-        "all cards reviewed"
-      ]);
-    }
-
-    return containsAny(text, [
-      "podcast complete",
-      "audio complete",
-      "finished listening",
-      "listen again"
-    ]);
-  }
-
-  private emit(activityType: ActivityType, signal: string): void {
-    const payload = this.buildEventPayload(activityType, signal);
-    if (!payload) {
-      return;
-    }
-
-    if (this.onCompletion) {
-      void this.onCompletion(payload);
-    }
-  }
-
-  private async emitAndWait(activityType: ActivityType, signal: string): Promise<void> {
-    const payload = this.buildEventPayload(activityType, signal);
-    if (!payload) {
-      return;
-    }
-    if (this.onCompletion) {
-      await this.onCompletion(payload);
-    }
-  }
-
-  private buildEventPayload(activityType: ActivityType, signal: string): ActivityCompletedEvent | null {
-    const contentTitle = deriveContentTitle(activityType);
-    const contentItemKey = deriveContentItemKey(activityType, contentTitle);
-    const dedupeKey = `${activityType}:${contentItemKey}`;
-    const lastAt = this.lastEmitAt[dedupeKey] ?? 0;
-    const current = Date.now();
-
-    if (current - lastAt < DETECTION_DEBOUNCE_MS) {
-      return null;
-    }
-
-    this.lastEmitAt[dedupeKey] = current;
-
-    return {
-      activityType,
-      contentItemKey,
-      contentTitle,
-      sourceUrl: location.href,
-      detectedSignal: signal,
-      occurredAt: current
-    };
-  }
 }
 
 class SrsPanel {
@@ -486,9 +148,7 @@ class SrsPanel {
     const saveIntervalsButton = this.shadow.querySelector<HTMLButtonElement>("#srs-save-intervals");
     const clearButton = this.shadow.querySelector<HTMLButtonElement>("#srs-clear-all");
     const collapseButton = this.shadow.querySelector<HTMLButtonElement>("#srs-collapse");
-    const completeQuizButton = this.shadow.querySelector<HTMLButtonElement>("#srs-complete-quiz");
-    const completeFlashcardsButton = this.shadow.querySelector<HTMLButtonElement>("#srs-complete-flashcards");
-    const completePodcastButton = this.shadow.querySelector<HTMLButtonElement>("#srs-complete-podcast");
+    const markTrainedButton = this.shadow.querySelector<HTMLButtonElement>("#srs-mark-trained");
 
     refreshButton?.addEventListener("click", () => {
       void this.refresh();
@@ -510,16 +170,8 @@ class SrsPanel {
       this.toggleCollapse();
     });
 
-    completeQuizButton?.addEventListener("click", () => {
-      void this.manualComplete("quiz");
-    });
-
-    completeFlashcardsButton?.addEventListener("click", () => {
-      void this.manualComplete("flashcards");
-    });
-
-    completePodcastButton?.addEventListener("click", () => {
-      void this.manualComplete("podcast");
+    markTrainedButton?.addEventListener("click", () => {
+      void this.handleMarkTrained();
     });
 
     this.shadow.addEventListener("click", (event) => {
@@ -528,7 +180,6 @@ class SrsPanel {
         return;
       }
 
-      // Find button elements in the click path (handles clicks on button children)
       const completeBtn = target.closest<HTMLElement>("button[data-complete]");
       if (completeBtn) {
         event.preventDefault();
@@ -560,6 +211,30 @@ class SrsPanel {
         }
       }
     });
+  }
+
+  private async handleMarkTrained(): Promise<void> {
+    const button = this.shadow?.querySelector<HTMLButtonElement>("#srs-mark-trained");
+    if (!button || button.disabled) {
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Saving…";
+
+    try {
+      await this.manualComplete("review");
+      button.textContent = "Trained ✓";
+    } catch {
+      button.textContent = "Mark Trained";
+      button.disabled = false;
+      return;
+    }
+
+    setTimeout(() => {
+      button.textContent = "Mark Trained";
+      button.disabled = false;
+    }, 1200);
   }
 
   private async updateIntervals(): Promise<void> {
@@ -605,7 +280,6 @@ class SrsPanel {
 
   private async deleteNotebooks(timelineIds: string[]): Promise<void> {
     if (timelineIds.length === 0) return;
-    // Delete first timeline
     const firstId = timelineIds[0]!;
     const response = await sendMessage({
       type: "timeline.delete",
@@ -617,7 +291,6 @@ class SrsPanel {
       return;
     }
 
-    // Delete remaining timelines
     for (const id of timelineIds.slice(1)) {
       await sendMessage({
         type: "timeline.delete",
@@ -625,25 +298,9 @@ class SrsPanel {
       });
     }
 
-    // Refresh once at the end
     await this.refresh();
     this.setStatus("Deleted notebook activities.");
   }
-
-  private async deleteTimeline(timelineId: string): Promise<void> {
-    const response = await sendMessage({
-      type: "timeline.delete",
-      payload: { timelineId }
-    });
-
-    if (!response.ok || !response.data) {
-      this.setStatus(response.error ?? "Failed to delete timeline.");
-      return;
-    }
-
-    this.renderDashboard(response.data);
-  }
-
 
   private async clearAll(): Promise<void> {
     const response = await sendMessage({ type: "timeline.clearAll" });
@@ -683,12 +340,11 @@ class SrsPanel {
       input.value = data.settings.intervalDays.join(", ");
     }
 
-    // Combine all timelines and group by notebook
     const allItems = [...data.due, ...data.overdue, ...data.upcoming];
     const notebooks = this.groupByNotebook(allItems);
     this.latestDashboardState = data;
     this.renderNotebookList(notebooks);
-    this.syncNotebookTimerColumn();
+    this.syncHomepageTimers();
 
     this.setText("#srs-total", String(data.totalTimelines));
     this.setStatus(`Updated ${new Date().toLocaleTimeString()}`);
@@ -718,7 +374,7 @@ class SrsPanel {
     return `${elapsedHours}h elapsed, ${remainingHours}h remaining`;
   }
 
-  private formatTimerColumn(item: DashboardTimeline): string {
+  private formatTimerBadge(item: DashboardTimeline): string {
     const now = Date.now();
     if (item.status === "overdue") {
       const overdueHours = Math.max(1, Math.floor((now - item.nextDueAt) / (60 * 60 * 1000)));
@@ -749,81 +405,65 @@ class SrsPanel {
     this.timerSyncPending = true;
     requestAnimationFrame(() => {
       this.timerSyncPending = false;
-      this.syncNotebookTimerColumn();
+      this.syncHomepageTimers();
     });
   }
 
-  private syncNotebookTimerColumn(): void {
+  private syncHomepageTimers(): void {
     if (!this.latestDashboardState) {
       return;
     }
 
-    const table = this.findNotebookTable();
-    if (!table) {
+    if (location.pathname !== "/") {
       return;
     }
 
-    const headerRow = this.getHeaderRow(table);
-    if (!headerRow) {
+    const timerMap = this.getNotebookTimerMap(this.latestDashboardState);
+    if (timerMap.size === 0) {
       return;
     }
 
-    // Disconnect observer while we write to avoid feedback loop
     this.notebookTableObserver?.disconnect();
 
-    let timerHeader = headerRow.querySelector<HTMLTableCellElement>("th[data-srs-timer-header='true']");
-    if (!timerHeader) {
-      timerHeader = document.createElement("th");
-      timerHeader.dataset.srsTimerHeader = "true";
-      timerHeader.textContent = "Timer";
-      headerRow.appendChild(timerHeader);
-    }
-
-    const notebookMap = this.getNotebookTimerMap(this.latestDashboardState);
-    const bodyRows = Array.from(table.tBodies).flatMap((body) => Array.from(body.rows));
-    for (const row of bodyRows) {
-      const title = row.cells.item(0)?.textContent?.trim().toLowerCase() ?? "";
-      const timerInfo = notebookMap.get(title);
-      let timerCell = row.querySelector<HTMLTableCellElement>("td[data-srs-timer-cell='true']");
-      if (!timerCell) {
-        timerCell = row.insertCell(-1);
-        timerCell.dataset.srsTimerCell = "true";
-      }
-      timerCell.textContent = timerInfo?.label ?? "—";
-      timerCell.style.whiteSpace = "nowrap";
-      timerCell.style.fontWeight = timerInfo && (timerInfo.status === "overdue" || timerInfo.status === "due") ? "600" : "400";
-    }
-
-    // Reconnect observer
-    this.notebookTableObserver?.observe(document.body, { childList: true, subtree: true });
-  }
-
-  private findNotebookTable(): HTMLTableElement | null {
-    const tables = Array.from(document.querySelectorAll("table"));
-    for (const table of tables) {
-      const headerRow = this.getHeaderRow(table);
-      if (!headerRow) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node: Text | null;
+    while ((node = walker.nextNode() as Text | null)) {
+      const text = node.textContent?.trim();
+      if (!text || text.length < 2) {
         continue;
       }
-      const headerText = headerRow.textContent?.toLowerCase() ?? "";
-      if (
-        headerText.includes("title") &&
-        headerText.includes("sources") &&
-        headerText.includes("created") &&
-        headerText.includes("role")
-      ) {
-        return table;
-      }
-    }
-    return null;
-  }
 
-  private getHeaderRow(table: HTMLTableElement): HTMLTableRowElement | null {
-    if (table.tHead?.rows.length) {
-      return table.tHead.rows[0] ?? null;
+      const key = text.toLowerCase();
+      const timerInfo = timerMap.get(key);
+      if (!timerInfo) {
+        continue;
+      }
+
+      const parent = node.parentElement;
+      if (!parent || parent.closest("[data-srs-timer]")) {
+        continue;
+      }
+
+      const existing = parent.querySelector("[data-srs-timer]");
+      if (existing) {
+        existing.textContent = timerInfo.label;
+        continue;
+      }
+
+      const badge = document.createElement("span");
+      badge.setAttribute("data-srs-timer", "true");
+      badge.style.cssText =
+        "margin-left:6px;font-size:11px;padding:1px 5px;border-radius:4px;white-space:nowrap;" +
+        (timerInfo.status === "overdue"
+          ? "background:#fef2f2;color:#be123c;"
+          : timerInfo.status === "due"
+            ? "background:#eff6ff;color:#1d4ed8;"
+            : "background:#f0fdf4;color:#15803d;");
+      badge.textContent = timerInfo.label;
+      parent.appendChild(badge);
     }
-    const firstRow = table.querySelector("tr");
-    return firstRow instanceof HTMLTableRowElement ? firstRow : null;
+
+    this.notebookTableObserver?.observe(document.body, { childList: true, subtree: true });
   }
 
   private getNotebookTimerMap(data: DashboardState): Map<string, { label: string; status: DashboardTimeline["status"] }> {
@@ -844,7 +484,7 @@ class SrsPanel {
 
       if (shouldReplace) {
         map.set(key, {
-          label: this.formatTimerColumn(item),
+          label: this.formatTimerBadge(item),
           status: item.status,
           score,
           nextDueAt: item.nextDueAt
@@ -897,35 +537,6 @@ class SrsPanel {
             </div>
           </li>`;
       })
-      .join("");
-  }
-
-  private renderList(selector: string, items: DashboardTimeline[], empty: string): void {
-    if (!this.shadow) {
-      return;
-    }
-
-    const element = this.shadow.querySelector(selector);
-    if (!element) {
-      return;
-    }
-
-    if (items.length === 0) {
-      element.innerHTML = `<li class="empty">${empty}</li>`;
-      return;
-    }
-
-    element.innerHTML = items
-      .map(
-        (item) =>
-          `<li data-open-url="${escapeHtml(item.sourceUrl)}">
-            <div class="line1">${escapeHtml(item.contentTitle)}</div>
-            <div class="line2">${item.activityType} · due ${new Date(item.nextDueAt).toLocaleString()}</div>
-            <div class="line3">
-              <button data-delete-timeline="${escapeHtml(item.id)}">Delete</button>
-            </div>
-          </li>`
-      )
       .join("");
   }
 
@@ -1002,16 +613,14 @@ class SrsPanel {
           text-overflow: ellipsis;
         }
         :host([data-theme="light"]) .title {
-          color: #0f172a;
+          color: #1e293b;
         }
         :host([data-theme="dark"]) .title {
           color: #e8eaed;
         }
         .meta {
-          font-size: 11px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
+          font-size: 10px;
+          margin-top: 1px;
         }
         :host([data-theme="light"]) .meta {
           color: #64748b;
@@ -1020,61 +629,57 @@ class SrsPanel {
           color: #9aa0a6;
         }
         .collapse-btn {
-          width: 28px;
-          height: 28px;
+          background: none;
           border: none;
+          cursor: pointer;
+          padding: 4px;
           border-radius: 6px;
           display: flex;
           align-items: center;
           justify-content: center;
-          cursor: pointer;
           flex-shrink: 0;
         }
         :host([data-theme="light"]) .collapse-btn {
-          background: #e2e8f0;
-          color: #475569;
+          color: #64748b;
         }
         :host([data-theme="light"]) .collapse-btn:hover {
-          background: #cbd5e1;
+          background: #e2e8f0;
         }
         :host([data-theme="dark"]) .collapse-btn {
-          background: #303134;
-          color: #e8eaed;
+          color: #9aa0a6;
         }
         :host([data-theme="dark"]) .collapse-btn:hover {
           background: #3c4043;
         }
+        :host([data-collapsed="true"]) .collapse-btn svg {
+          transform: rotate(180deg);
+        }
         .panel-body {
           flex: 1;
           overflow-y: auto;
+          padding: 8px 0;
         }
         :host([data-theme="light"]) .panel-body {
           background: #ffffff;
         }
         :host([data-theme="dark"]) .panel-body {
-          background: #1f1f1f;
+          background: #292a2d;
         }
         .section {
-          padding: 12px;
-          border-bottom: 1px solid;
+          padding: 6px 12px;
         }
-        :host([data-theme="light"]) .section {
-          border-color: #f1f5f9;
-        }
-        :host([data-theme="dark"]) .section {
-          border-color: #2d2e30;
-        }
-        .section h4 {
-          margin: 0 0 8px;
-          font-size: 11px;
+        h4 {
+          font-size: 10px;
           text-transform: uppercase;
           letter-spacing: 0.05em;
+          margin: 0 0 6px 0;
+          font-weight: 600;
         }
-        :host([data-theme="light"]) .section h4 {
-          color: #64748b;
+        :host([data-theme="light"]) h4 {
+          color: #94a3b8;
         }
-        :host([data-theme="dark"]) .section h4 {
-          color: #9aa0a6;
+        :host([data-theme="dark"]) h4 {
+          color: #5f6368;
         }
         ul {
           list-style: none;
@@ -1082,57 +687,45 @@ class SrsPanel {
           padding: 0;
         }
         li {
-          padding: 8px;
-          border: 1px solid;
-          border-radius: 8px;
-          margin-bottom: 8px;
+          padding: 6px;
+          border-radius: 6px;
           cursor: pointer;
-          transition: background 0.15s, transform 0.1s;
-        }
-        li:hover {
-          transform: translateY(-1px);
-        }
-        :host([data-theme="light"]) li {
-          background: #ffffff;
-          border-color: #e2e8f0;
+          font-size: 11px;
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
         }
         :host([data-theme="light"]) li:hover {
-          background: #f8fafc;
-          border-color: #93c5fd;
-        }
-        :host([data-theme="dark"]) li {
-          background: #2d2e30;
-          border-color: #3c4043;
+          background: #f1f5f9;
         }
         :host([data-theme="dark"]) li:hover {
-          background: #3c4043;
-          border-color: #8ab4f8;
+          background: #35363a;
         }
-        .empty {
-          border-style: dashed;
-          font-size: 12px;
+        li.empty {
+          cursor: default;
+          padding: 6px;
+          text-align: center;
         }
-        :host([data-theme="light"]) .empty {
+        :host([data-theme="light"]) li.empty {
           color: #94a3b8;
-          background: #f8fafc;
         }
-        :host([data-theme="dark"]) .empty {
+        :host([data-theme="dark"]) li.empty {
           color: #5f6368;
-          background: #2d2e30;
         }
         .line1 {
-          font-size: 12px;
           font-weight: 600;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         :host([data-theme="light"]) .line1 {
-          color: #0f172a;
+          color: #1e293b;
         }
         :host([data-theme="dark"]) .line1 {
           color: #e8eaed;
         }
         .line2 {
-          margin-top: 4px;
-          font-size: 11px;
+          font-size: 10px;
         }
         :host([data-theme="light"]) .line2 {
           color: #64748b;
@@ -1141,61 +734,45 @@ class SrsPanel {
           color: #9aa0a6;
         }
         .line3 {
-          margin-top: 6px;
           display: flex;
           gap: 6px;
         }
-        .line3 a {
-          font-size: 11px;
-          text-decoration: none;
-          border-radius: 4px;
-          padding: 3px 6px;
-        }
-        :host([data-theme="light"]) .line3 a {
-          color: #0369a1;
-          background: #e0f2fe;
-        }
-        :host([data-theme="dark"]) .line3 a {
-          color: #8ab4f8;
-          background: #1f1f1f;
-        }
         .line3 button {
-          font-size: 11px;
+          font-size: 10px;
+          padding: 2px 6px;
           border: 1px solid;
           border-radius: 4px;
-          padding: 3px 6px;
           cursor: pointer;
         }
         :host([data-theme="light"]) .line3 button {
           background: #fef2f2;
-          border-color: #fca5a5;
+          border-color: #fecaca;
           color: #be123c;
         }
         :host([data-theme="light"]) .line3 button:hover {
           background: #fee2e2;
         }
         :host([data-theme="dark"]) .line3 button {
-          background: #3c2b2b;
-          border-color: #5f4b4b;
+          background: #3d2020;
+          border-color: #5f3838;
           color: #f28b82;
         }
         :host([data-theme="dark"]) .line3 button:hover {
-          background: #5f4b4b;
+          background: #4d2828;
         }
         .activities {
-          margin-top: 6px;
           display: flex;
           flex-direction: column;
-          gap: 6px;
+          gap: 2px;
         }
         .activity-row {
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-          font-size: 11px;
+          gap: 4px;
+          font-size: 10px;
         }
         .activity-type {
+          font-weight: 500;
           text-transform: capitalize;
           flex-shrink: 0;
         }
@@ -1309,6 +886,41 @@ class SrsPanel {
         :host([data-theme="dark"]) button.main:hover {
           background: #2d2e30;
         }
+        button.trained {
+          width: 100%;
+          border: 1px solid;
+          border-radius: 6px;
+          padding: 8px 10px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        :host([data-theme="light"]) button.trained {
+          background: #2563eb;
+          border-color: #2563eb;
+          color: #ffffff;
+        }
+        :host([data-theme="light"]) button.trained:hover {
+          background: #1d4ed8;
+        }
+        :host([data-theme="light"]) button.trained:disabled {
+          background: #93c5fd;
+          border-color: #93c5fd;
+          cursor: default;
+        }
+        :host([data-theme="dark"]) button.trained {
+          background: #8ab4f8;
+          border-color: #8ab4f8;
+          color: #202124;
+        }
+        :host([data-theme="dark"]) button.trained:hover {
+          background: #aecbfa;
+        }
+        :host([data-theme="dark"]) button.trained:disabled {
+          background: #5f8a9e;
+          border-color: #5f8a9e;
+          cursor: default;
+        }
         .panel-footer {
           padding: 8px 12px;
           font-size: 10px;
@@ -1340,12 +952,7 @@ class SrsPanel {
 
         <div class="panel-body">
           <div class="section controls">
-            <h4>Manual Complete</h4>
-            <div class="row">
-              <button class="main" id="srs-complete-quiz">Quiz</button>
-              <button class="main" id="srs-complete-flashcards">Cards</button>
-              <button class="main" id="srs-complete-podcast">Podcast</button>
-            </div>
+            <button class="trained" id="srs-mark-trained">Mark Trained</button>
           </div>
           <div class="section controls">
             <h4>Intervals (days)</h4>
@@ -1417,10 +1024,6 @@ function findPathId(pathname: string): string | null {
     }
   }
   return null;
-}
-
-function containsAny(text: string, keywords: string[]): boolean {
-  return keywords.some((keyword) => text.includes(keyword));
 }
 
 function stableHash(value: string): string {

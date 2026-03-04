@@ -187,6 +187,34 @@ async function handleDeleteTimeline(timelineId: string): Promise<DashboardState>
   return grouped;
 }
 
+async function handleCompleteTimeline(timelineId: string): Promise<DashboardState> {
+  const state = await loadState();
+  const timeline = state.timelines[timelineId];
+  if (!timeline) {
+    throw new Error("Timeline not found");
+  }
+
+  const current = now();
+  timeline.lastCompletionAt = current;
+  timeline.history = [
+    ...timeline.history,
+    {
+      completedAt: current,
+      detectedFromUrl: timeline.sourceUrl,
+      detectedSignal: "manual-complete"
+    }
+  ].slice(-20);
+
+  const refreshed = refreshTimeline(timeline, current);
+  state.timelines[timelineId] = refreshed;
+  await saveState(state);
+  await scheduleAlarm(refreshed);
+
+  const grouped = groupTimelines(Object.values(state.timelines), current);
+  grouped.settings = state.settings;
+  return grouped;
+}
+
 async function handleClearAll(): Promise<DashboardState> {
   const alarms = await chrome.alarms.getAll();
   await Promise.all(alarms.filter((a) => a.name.startsWith(ALARM_PREFIX)).map((a) => chrome.alarms.clear(a.name)));
@@ -291,6 +319,12 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
 
       if (message.type === "timeline.delete") {
         const data = await handleDeleteTimeline(message.payload.timelineId);
+        sendResponse({ ok: true, data } satisfies MessageResponse);
+        return;
+      }
+
+      if (message.type === "timeline.complete") {
+        const data = await handleCompleteTimeline(message.payload.timelineId);
         sendResponse({ ok: true, data } satisfies MessageResponse);
         return;
       }

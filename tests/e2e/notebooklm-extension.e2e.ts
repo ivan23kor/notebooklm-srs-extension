@@ -81,6 +81,82 @@ test.describe("NotebookLM SRS extension e2e", () => {
     }
   });
 
+  test("floating mark-complete button creates a timeline and shows feedback", async () => {
+    const harness = await launchHarness();
+    try {
+      // Page with "quiz" in URL so float button appears, but NO completion keywords
+      await setupNotebookRoute(harness.context, {
+        title: "Organic Chemistry Quiz",
+        body: "Welcome to the quiz"
+      });
+
+      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/quiz-float?mode=quiz&id=quiz-float`);
+      await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("0");
+
+      // Float button should be visible
+      await expect.poll(() => getFloatButtonVisible(harness.page)).toBe(true);
+
+      // Click the floating button
+      await clickFloatButton(harness.page);
+
+      // Should show "Marked ✓" feedback after completion
+      await expect.poll(() => getFloatButtonLabel(harness.page)).toBe("Marked ✓");
+
+      // Timeline should have been created
+      await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("1");
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
+  test("timer column appears in the notebook table", async () => {
+    const harness = await launchHarness();
+    try {
+      // Step 1: create a timeline via auto-detection on a quiz page
+      await setupNotebookRoute(harness.context, {
+        title: "Cell Biology Quiz",
+        body: "Start your quiz"
+      });
+
+      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/quiz-timer?mode=quiz&id=quiz-timer`);
+      await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("0");
+
+      await harness.page.evaluate(() => {
+        const marker = document.createElement("div");
+        marker.textContent = "quiz complete final score review answers";
+        document.body.appendChild(marker);
+      });
+
+      await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("1");
+
+      // Step 2: navigate to a page with a notebook table
+      await setupNotebookTableRoute(harness.context, [
+        { title: "Cell Biology Quiz", sources: "1 Source", created: "Feb 28, 2026", role: "Owner" }
+      ]);
+
+      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/`);
+      await expect.poll(() => getShadowText(harness.page, "#srs-status")).not.toBeNull();
+
+      // Timer header should be injected
+      await expect.poll(() =>
+        harness.page.evaluate(() => {
+          const th = document.querySelector("th[data-srs-timer-header='true']");
+          return th?.textContent ?? null;
+        })
+      ).toBe("Timer");
+
+      // Timer cell for the tracked notebook should NOT be the dash placeholder
+      const timerCellText = await harness.page.evaluate(() => {
+        const td = document.querySelector("td[data-srs-timer-cell='true']");
+        return td?.textContent ?? null;
+      });
+      expect(timerCellText).not.toBeNull();
+      expect(timerCellText).not.toBe("—");
+    } finally {
+      await closeHarness(harness);
+    }
+  });
+
   test("updates intervals and supports item deletion + clear all", async () => {
     const harness = await launchHarness();
     try {
@@ -269,6 +345,61 @@ async function clickShadow(page: Page, selector: string): Promise<void> {
     },
     { rootId: EXTENSION_ROOT_ID, selector }
   );
+}
+
+async function getFloatButtonVisible(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const host = document.getElementById("notebooklm-srs-float-btn");
+    return host !== null && host.style.display !== "none";
+  });
+}
+
+async function getFloatButtonLabel(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const host = document.getElementById("notebooklm-srs-float-btn");
+    const root = host?.shadowRoot;
+    return root?.querySelector("#srs-float-label")?.textContent ?? null;
+  });
+}
+
+async function clickFloatButton(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const host = document.getElementById("notebooklm-srs-float-btn");
+    const root = host?.shadowRoot;
+    const button = root?.querySelector<HTMLButtonElement>("#srs-float-complete");
+    if (!button) {
+      throw new Error("Float button not found in shadow root");
+    }
+    button.click();
+  });
+}
+
+async function setupNotebookTableRoute(
+  context: BrowserContext,
+  rows: Array<{ title: string; sources: string; created: string; role: string }>
+): Promise<void> {
+  const rowsHtml = rows
+    .map(
+      (r) =>
+        `<tr><td>${escapeHtml(r.title)}</td><td>${escapeHtml(r.sources)}</td><td>${escapeHtml(r.created)}</td><td>${escapeHtml(r.role)}</td></tr>`
+    )
+    .join("");
+
+  const html = `<!doctype html>
+<html>
+  <head><title>NotebookLM</title><meta charset="utf-8" /></head>
+  <body>
+    <h1>My Notebooks</h1>
+    <table>
+      <thead><tr><th>Title</th><th>Sources</th><th>Created</th><th>Role</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  </body>
+</html>`;
+
+  await context.route(`${NOTEBOOKLM_ORIGIN}/**`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "text/html", body: html });
+  });
 }
 
 function escapeHtml(value: string): string {

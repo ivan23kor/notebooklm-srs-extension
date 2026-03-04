@@ -46,26 +46,27 @@ test.describe("NotebookLM SRS extension e2e", () => {
     }
   });
 
-  test("tracks a completion signal and persists timeline data", async () => {
+  test("Mark Trained button creates a timeline and shows feedback", async () => {
     const harness = await launchHarness();
     try {
       await setupNotebookRoute(harness.context, {
-        title: "Cell Biology Quiz",
-        body: "Start your quiz"
+        title: "Organic Chemistry",
+        body: "Welcome to the notebook"
       });
 
-      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/quiz-1?mode=quiz&id=quiz-1`);
+      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/chem-1`);
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("0");
 
-      await harness.page.evaluate(() => {
-        const marker = document.createElement("div");
-        marker.textContent = "quiz complete final score review answers";
-        document.body.appendChild(marker);
-      });
+      // Click the Mark Trained button
+      await clickShadow(harness.page, "#srs-mark-trained");
 
+      // Should show "Trained ✓" feedback after completion
+      await expect.poll(() => getShadowText(harness.page, "#srs-mark-trained")).toBe("Trained ✓");
+
+      // Timeline should have been created
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("1");
-      await expect.poll(() => getListCount(harness.page, "#srs-upcoming")).toBe(1);
 
+      // Verify the stored timeline uses "review" activity type
       const timelines = await readTimelinesFromServiceWorker(harness.worker);
       const values = Object.values(timelines) as Array<{
         activityType: string;
@@ -73,85 +74,50 @@ test.describe("NotebookLM SRS extension e2e", () => {
         intervalDays: number[];
       }>;
       expect(values.length).toBe(1);
-      expect(values[0]?.activityType).toBe("quiz");
-      expect(values[0]?.contentTitle).toContain("Cell Biology Quiz");
+      expect(values[0]?.activityType).toBe("review");
+      expect(values[0]?.contentTitle).toContain("Organic Chemistry");
       expect(values[0]?.intervalDays).toEqual([1, 7, 14, 30]);
     } finally {
       await closeHarness(harness);
     }
   });
 
-  test("floating mark-complete button creates a timeline and shows feedback", async () => {
+  test("homepage timer badges appear next to tracked notebook titles", async () => {
     const harness = await launchHarness();
     try {
-      // Page with "quiz" in URL so float button appears, but NO completion keywords
+      // Step 1: create a timeline via Mark Trained on a notebook page
       await setupNotebookRoute(harness.context, {
-        title: "Organic Chemistry Quiz",
-        body: "Welcome to the quiz"
+        title: "Cell Biology",
+        body: "Notebook content"
       });
 
-      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/quiz-float?mode=quiz&id=quiz-float`);
+      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/bio-1`);
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("0");
 
-      // Float button should be visible
-      await expect.poll(() => getFloatButtonVisible(harness.page)).toBe(true);
-
-      // Click the floating button
-      await clickFloatButton(harness.page);
-
-      // Should show "Marked ✓" feedback after completion
-      await expect.poll(() => getFloatButtonLabel(harness.page)).toBe("Marked ✓");
-
-      // Timeline should have been created
-      await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("1");
-    } finally {
-      await closeHarness(harness);
-    }
-  });
-
-  test("timer column appears in the notebook table", async () => {
-    const harness = await launchHarness();
-    try {
-      // Step 1: create a timeline via auto-detection on a quiz page
-      await setupNotebookRoute(harness.context, {
-        title: "Cell Biology Quiz",
-        body: "Start your quiz"
-      });
-
-      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/quiz-timer?mode=quiz&id=quiz-timer`);
-      await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("0");
-
-      await harness.page.evaluate(() => {
-        const marker = document.createElement("div");
-        marker.textContent = "quiz complete final score review answers";
-        document.body.appendChild(marker);
-      });
-
+      await clickShadow(harness.page, "#srs-mark-trained");
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("1");
 
-      // Step 2: navigate to a page with a notebook table
-      await setupNotebookTableRoute(harness.context, [
-        { title: "Cell Biology Quiz", sources: "1 Source", created: "Feb 28, 2026", role: "Owner" }
-      ]);
+      // Step 2: navigate to homepage with notebook title elements
+      await setupHomepageRoute(harness.context, ["Cell Biology", "Untracked Notebook"]);
 
       await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/`);
       await expect.poll(() => getShadowText(harness.page, "#srs-status")).not.toBeNull();
 
-      // Timer header should be injected
+      // Timer badge should be injected next to the tracked notebook title
       await expect.poll(() =>
         harness.page.evaluate(() => {
-          const th = document.querySelector("th[data-srs-timer-header='true']");
-          return th?.textContent ?? null;
+          const badge = document.querySelector("[data-srs-timer]");
+          return badge?.textContent ?? null;
         })
-      ).toBe("Timer");
+      ).not.toBeNull();
 
-      // Timer cell for the tracked notebook should NOT be the dash placeholder
-      const timerCellText = await harness.page.evaluate(() => {
-        const td = document.querySelector("td[data-srs-timer-cell='true']");
-        return td?.textContent ?? null;
+      // The badge should contain a timer value (not be empty)
+      const badgeText = await harness.page.evaluate(() => {
+        const badge = document.querySelector("[data-srs-timer]");
+        return badge?.textContent ?? null;
       });
-      expect(timerCellText).not.toBeNull();
-      expect(timerCellText).not.toBe("—");
+      expect(badgeText).not.toBeNull();
+      expect(badgeText!.length).toBeGreaterThan(0);
     } finally {
       await closeHarness(harness);
     }
@@ -165,15 +131,11 @@ test.describe("NotebookLM SRS extension e2e", () => {
         body: "Audio overview"
       });
 
-      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/podcast-1?mode=podcast&id=podcast-1`);
+      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/podcast-1`);
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("0");
 
-      await harness.page.evaluate(() => {
-        const marker = document.createElement("div");
-        marker.textContent = "podcast complete finished listening";
-        document.body.appendChild(marker);
-      });
-
+      // Use Mark Trained instead of auto-detection
+      await clickShadow(harness.page, "#srs-mark-trained");
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("1");
 
       await setShadowInputValue(harness.page, "#srs-intervals", "2, 5, 9");
@@ -181,20 +143,19 @@ test.describe("NotebookLM SRS extension e2e", () => {
 
       await expect.poll(() => getShadowInputValue(harness.page, "#srs-intervals")).toBe("2, 5, 9");
 
-      await clickShadow(harness.page, "button[data-delete-timeline]");
+      // Delete via notebook delete button
+      harness.page.once("dialog", (dialog) => dialog.accept());
+      await clickShadow(harness.page, "button[data-delete-notebook]");
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("0");
 
+      // Create another timeline
       await setupNotebookRoute(harness.context, {
         title: "Podcast: Genome Basics Part 2",
         body: "Audio overview"
       });
-      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/podcast-2?mode=podcast&id=podcast-2`);
+      await harness.page.goto(`${NOTEBOOKLM_ORIGIN}/notebook/podcast-2`);
 
-      await harness.page.evaluate(() => {
-        const marker = document.createElement("div");
-        marker.textContent = "podcast complete listen again";
-        document.body.appendChild(marker);
-      });
+      await clickShadow(harness.page, "#srs-mark-trained");
       await expect.poll(() => getShadowText(harness.page, "#srs-total")).toBe("1");
 
       harness.page.once("dialog", (dialog) => dialog.accept());
@@ -266,6 +227,28 @@ async function setupNotebookRoute(
   });
 }
 
+async function setupHomepageRoute(
+  context: BrowserContext,
+  notebookTitles: string[]
+): Promise<void> {
+  const titlesHtml = notebookTitles
+    .map((t) => `<div class="notebook-card"><span class="notebook-title">${escapeHtml(t)}</span></div>`)
+    .join("");
+
+  const html = `<!doctype html>
+<html>
+  <head><title>NotebookLM</title><meta charset="utf-8" /></head>
+  <body>
+    <h1>My Notebooks</h1>
+    <div class="notebooks-list">${titlesHtml}</div>
+  </body>
+</html>`;
+
+  await context.route(`${NOTEBOOKLM_ORIGIN}/**`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "text/html", body: html });
+  });
+}
+
 async function readTimelinesFromServiceWorker(worker: ExtensionWorker): Promise<Record<string, unknown>> {
   return worker.evaluate(async () => {
     return await new Promise<Record<string, unknown>>((resolve) => {
@@ -285,21 +268,6 @@ async function getShadowText(page: Page, selector: string): Promise<string | nul
       return target?.textContent?.trim() ?? null;
     },
     { rootId: EXTENSION_ROOT_ID, selector }
-  );
-}
-
-async function getListCount(page: Page, listSelector: string): Promise<number> {
-  return page.evaluate(
-    ({ rootId, listSelector }) => {
-      const host = document.getElementById(rootId);
-      const root = host?.shadowRoot;
-      const list = root?.querySelector(listSelector);
-      if (!list) {
-        return 0;
-      }
-      return list.querySelectorAll("li:not(.empty)").length;
-    },
-    { rootId: EXTENSION_ROOT_ID, listSelector }
   );
 }
 
@@ -345,61 +313,6 @@ async function clickShadow(page: Page, selector: string): Promise<void> {
     },
     { rootId: EXTENSION_ROOT_ID, selector }
   );
-}
-
-async function getFloatButtonVisible(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
-    const host = document.getElementById("notebooklm-srs-float-btn");
-    return host !== null && host.style.display !== "none";
-  });
-}
-
-async function getFloatButtonLabel(page: Page): Promise<string | null> {
-  return page.evaluate(() => {
-    const host = document.getElementById("notebooklm-srs-float-btn");
-    const root = host?.shadowRoot;
-    return root?.querySelector("#srs-float-label")?.textContent ?? null;
-  });
-}
-
-async function clickFloatButton(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const host = document.getElementById("notebooklm-srs-float-btn");
-    const root = host?.shadowRoot;
-    const button = root?.querySelector<HTMLButtonElement>("#srs-float-complete");
-    if (!button) {
-      throw new Error("Float button not found in shadow root");
-    }
-    button.click();
-  });
-}
-
-async function setupNotebookTableRoute(
-  context: BrowserContext,
-  rows: Array<{ title: string; sources: string; created: string; role: string }>
-): Promise<void> {
-  const rowsHtml = rows
-    .map(
-      (r) =>
-        `<tr><td>${escapeHtml(r.title)}</td><td>${escapeHtml(r.sources)}</td><td>${escapeHtml(r.created)}</td><td>${escapeHtml(r.role)}</td></tr>`
-    )
-    .join("");
-
-  const html = `<!doctype html>
-<html>
-  <head><title>NotebookLM</title><meta charset="utf-8" /></head>
-  <body>
-    <h1>My Notebooks</h1>
-    <table>
-      <thead><tr><th>Title</th><th>Sources</th><th>Created</th><th>Role</th></tr></thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>
-  </body>
-</html>`;
-
-  await context.route(`${NOTEBOOKLM_ORIGIN}/**`, async (route) => {
-    await route.fulfill({ status: 200, contentType: "text/html", body: html });
-  });
 }
 
 function escapeHtml(value: string): string {

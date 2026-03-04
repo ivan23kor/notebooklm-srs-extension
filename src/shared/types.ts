@@ -1,4 +1,4 @@
-export type ActivityType = "quiz" | "flashcards" | "podcast";
+export type ActivityType = "quiz" | "flashcards" | "podcast" | "review";
 
 export type TimelineStatus = "active" | "due" | "overdue";
 

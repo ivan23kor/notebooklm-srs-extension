@@ -8,11 +8,10 @@
     "build:watch": "bun --watch run scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "test:e2e": "bun run build && bunx playwright test",
+    "test:e2e": "bun run build && bun test tests/e2e/notebooklm-extension.test.ts",
     "check": "bun run typecheck && bun run test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "@types/bun": "latest",
     "@types/chrome": "^0.1.37",
     "typescript": "^5.9.3"

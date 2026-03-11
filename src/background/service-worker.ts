@@ -150,8 +150,27 @@ async function handleActivityCompleted(message: ExtensionMessage & { type: "acti
   }
 
   state.timelines[timeline.id] = timeline;
+
+  // Reset all sibling timelines sharing the same contentItemKey (notebook).
+  // Marking any activity (quiz, podcast, etc.) as complete should reset
+  // the SRS timer for the entire notebook.
+  for (const [id, sibling] of Object.entries(state.timelines)) {
+    if (id !== timeline.id && sibling.contentItemKey === message.payload.contentItemKey) {
+      sibling.lastCompletionAt = message.payload.occurredAt;
+      sibling.history = [
+        ...sibling.history,
+        {
+          completedAt: message.payload.occurredAt,
+          detectedFromUrl: message.payload.sourceUrl,
+          detectedSignal: `sibling-reset:${message.payload.detectedSignal}`
+        }
+      ].slice(-20);
+      state.timelines[id] = refreshTimeline(sibling, current);
+    }
+  }
+
   await saveState(state);
-  await scheduleAlarm(timeline);
+  await scheduleAllAlarms(state.timelines);
 }
 
 async function handleIntervalsUpdate(

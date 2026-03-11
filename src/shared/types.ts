@@ -68,7 +68,8 @@ export type ExtensionMessage =
   | { type: "timeline.delete"; payload: { timelineId: string } }
   | { type: "timeline.complete"; payload: { timelineId: string } }
   | { type: "timeline.clearAll" }
-  | { type: "notifications.retrigger" };
+  | { type: "notifications.retrigger" }
+  | { type: "state.refresh"; payload: { contentItemKey: string; occurredAt: number } };
 
 export interface MessageResponse {
   ok: boolean;

@@ -67,7 +67,8 @@ export type ExtensionMessage =
   | { type: "settings.updateIntervals"; payload: { intervalDays: number[] } }
   | { type: "timeline.delete"; payload: { timelineId: string } }
   | { type: "timeline.complete"; payload: { timelineId: string } }
-  | { type: "timeline.clearAll" };
+  | { type: "timeline.clearAll" }
+  | { type: "notifications.retrigger" };
 
 export interface MessageResponse {
   ok: boolean;

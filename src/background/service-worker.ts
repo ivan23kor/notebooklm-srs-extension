@@ -1,8 +1,10 @@
 import {
   ALARM_PREFIX,
   NOTIFICATION_DEDUPE_MS,
-  NOTIFICATION_PREFIX
+  NOTIFICATION_PREFIX,
+  PROCRASTINATION_HOSTS
 } from "../shared/constants";
+import { formatTimerBadge } from "../content/homepage-badges";
 import { applyIntervalSettings, buildTimelineFromCompletion, refreshTimeline } from "../shared/scheduler";
 import { loadNotificationMeta, loadState, saveNotificationMeta, saveState, clearAllState } from "../shared/storage";
 import { sanitizeIntervals } from "../shared/time";
@@ -55,7 +57,7 @@ async function notifyTimelineDue(timeline: Timeline, reason: "alarm" | "startup"
 
   chrome.notifications.create(notificationId, {
     type: "basic",
-    iconUrl: "icon-128.png",
+    iconUrl: chrome.runtime.getURL("icon-128.png"),
     title: "NotebookLM review due",
     message: `${timeline.contentTitle} (${timeline.activityType}) is due for spaced repetition.`,
     priority: reason === "startup" ? 0 : 1
@@ -296,6 +298,52 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   })();
 });
 
+function isProcrastinationUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return PROCRASTINATION_HOSTS.includes(host);
+  } catch {
+    return false;
+  }
+}
+
+async function nagIfOverdue(url: string): Promise<void> {
+  if (!isProcrastinationUrl(url)) return;
+
+  const state = await loadState();
+  const current = now();
+  const overdueItems: string[] = [];
+
+  for (const timeline of Object.values(state.timelines)) {
+    const badge = formatTimerBadge(timeline, state.settings.intervalDays, current);
+    if (badge.isOverdue) {
+      overdueItems.push(timeline.contentTitle);
+    }
+  }
+
+  if (overdueItems.length === 0) return;
+
+  chrome.notifications.create(`nag:${Date.now()}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icon-128.png"),
+    title: "🦉 You have overdue reviews!",
+    message: `${overdueItems.join(", ")} — go review instead of procrastinating!`,
+    priority: 2
+  });
+}
+
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" && tab.url) {
+    void nagIfOverdue(tab.url);
+  }
+});
+
+chrome.tabs.onCreated.addListener((tab) => {
+  if (tab.pendingUrl) {
+    void nagIfOverdue(tab.pendingUrl);
+  }
+});
+
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
   void (async () => {
     try {
@@ -326,6 +374,24 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       if (message.type === "timeline.complete") {
         const data = await handleCompleteTimeline(message.payload.timelineId);
         sendResponse({ ok: true, data } satisfies MessageResponse);
+        return;
+      }
+
+      if (message.type === "notifications.retrigger") {
+        await saveNotificationMeta({});
+        const state = await loadState();
+        const current = now();
+        for (const timeline of Object.values(state.timelines)) {
+          const refreshed = refreshTimeline(timeline, current);
+          const badge = formatTimerBadge(refreshed, state.settings.intervalDays, current);
+          if (badge.isOverdue) {
+            refreshed.lastNotificationAt = undefined;
+            state.timelines[refreshed.id] = refreshed;
+            await notifyTimelineDue(refreshed, "alarm");
+          }
+        }
+        await saveState(state);
+        sendResponse({ ok: true } satisfies MessageResponse);
         return;
       }
 

@@ -47,9 +47,11 @@ export function formatTimerBadge(
   const elapsedHours = getElapsedHours(item.lastCompletionAt, now);
   const currentIntervalDays = getDisplayIntervalDays(intervalDays, item.lastCompletionAt, now);
 
-  const label = elapsedHours < 24
+  const elapsedStr = elapsedHours < 24
     ? `${elapsedHours}h`
     : `${(elapsedHours / 24).toFixed(1)}d`;
+  
+  const label = `${elapsedStr}/${currentIntervalDays}d`;
 
   return {
     label,

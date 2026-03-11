@@ -38,18 +38,18 @@ function makeState(items: DashboardTimeline[]): DashboardState {
 }
 
 describe("homepage badges", () => {
-  it("formats an upcoming first repetition as hours over the 1 day target", () => {
+  it("formats an upcoming first repetition as hours when under 24h", () => {
     const badge = formatTimerBadge(makeTimeline("Biology", 3), [1, 7, 14, 30], NOW);
 
-    expect(badge.label).toBe("3h/1d");
+    expect(badge.label).toBe("3h");
     expect(badge.isOverdue).toBe(false);
     expect(badge.intervalDays).toBe(1);
   });
 
-  it("keeps the first interval label once it is overdue", () => {
+  it("formats elapsed time as days with decimals when 24h or more", () => {
     const badge = formatTimerBadge(makeTimeline("Biology", 93), [1, 7, 14, 30], NOW);
 
-    expect(badge.label).toBe("93h/1d");
+    expect(badge.label).toBe("3.9d");
     expect(badge.isOverdue).toBe(true);
     expect(badge.intervalDays).toBe(1);
   });
@@ -57,7 +57,7 @@ describe("homepage badges", () => {
   it("advances the displayed interval only after the next repetition window starts", () => {
     const badge = formatTimerBadge(makeTimeline("Biology", 8 * 24 + 2), [1, 7, 14, 30], NOW);
 
-    expect(badge.label).toBe("194h/7d");
+    expect(badge.label).toBe("8.1d");
     expect(badge.isOverdue).toBe(true);
     expect(badge.intervalDays).toBe(7);
   });
@@ -77,13 +77,13 @@ describe("homepage badges", () => {
 
     expect(map.size).toBe(2);
     expect(map.get("biology notes")).toEqual({
-      label: "93h/1d",
+      label: "3.9d",
       isOverdue: true,
       intervalDays: 1,
       elapsedHours: 93
     });
     expect(map.get("chemistry")).toEqual({
-      label: "12h/1d",
+      label: "12h",
       isOverdue: false,
       intervalDays: 1,
       elapsedHours: 12

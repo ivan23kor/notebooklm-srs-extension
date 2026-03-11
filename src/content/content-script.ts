@@ -189,6 +189,16 @@ class StudioRefreshButtonInjector {
       const actionsContainer = card.querySelector(".artifact-actions");
       if (!actionsContainer) continue;
 
+      // Normalize spacing on all buttons in the container
+      if (!actionsContainer.hasAttribute("data-srs-spacing-adjusted")) {
+        actionsContainer.setAttribute("data-srs-spacing-adjusted", "true");
+        actionsContainer.style.gap = "0";
+        const allButtons = actionsContainer.querySelectorAll("button");
+        for (const b of allButtons) {
+          b.style.margin = "0 2px";
+        }
+      }
+
       const moreBtn = actionsContainer.querySelector<HTMLElement>("button[aria-label='More']");
 
       const btn = document.createElement("button");
@@ -197,15 +207,15 @@ class StudioRefreshButtonInjector {
       btn.setAttribute("title", "Mark as refreshed (SRS)");
       btn.type = "button";
       btn.style.cssText =
-        "background:#2d2e30;border:none;cursor:pointer;padding:0;border-radius:50%;" +
+        "background:#1e1f21;border:none;cursor:pointer;padding:0;border-radius:50%;" +
         "width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;" +
-        "color:#a8c7fa;font-size:18px;transition:background 0.15s;margin-left:4px;";
+        "color:#a8c7fa;font-size:18px;transition:background 0.15s;margin:0 2px;flex-shrink:0;";
       btn.textContent = "✓";
       btn.addEventListener("mouseenter", () => {
-        btn.style.background = "#3c3d40";
+        btn.style.background = "#2d2e30";
       });
       btn.addEventListener("mouseleave", () => {
-        btn.style.background = "#2d2e30";
+        btn.style.background = "#1e1f21";
       });
 
       btn.addEventListener("click", (e) => {
@@ -219,6 +229,9 @@ class StudioRefreshButtonInjector {
       } else {
         actionsContainer.appendChild(btn);
       }
+
+      // Ensure all buttons have consistent spacing
+      btn.style.margin = "0 2px";
     }
 
     this.observer?.observe(document.body, { childList: true, subtree: true });

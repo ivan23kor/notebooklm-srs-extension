@@ -13,12 +13,13 @@ function srsLog(...args: unknown[]): void {
 
 async function start(): Promise<void> {
   srsLog("init", location.href);
-  const injector = new HomepageTimerInjector();
-  await injector.refresh();
+  const homepageInjector = new HomepageTimerInjector();
+  await homepageInjector.refresh();
 
   // Always start the studio injector — NotebookLM is a SPA, so the user
   // may navigate to a notebook page after the content script has loaded.
   const studioInjector = new StudioRefreshButtonInjector();
+  studioInjector.setHomepageInjector(homepageInjector);
   studioInjector.start();
   srsLog("studio injector started");
 
@@ -32,6 +33,17 @@ class HomepageTimerInjector {
 
   constructor() {
     this.bindNotebookTableObserver();
+    this.setupStateRefreshListener();
+  }
+
+  private setupStateRefreshListener(): void {
+    chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown }) => {
+      if (message.type === "state.refresh") {
+        srsLog("received state.refresh, refreshing timers");
+        void this.refresh();
+      }
+      return true;
+    });
   }
 
   async refresh(): Promise<void> {
@@ -159,6 +171,11 @@ function getNotebookTitle(): string {
 class StudioRefreshButtonInjector {
   private observer: MutationObserver | null = null;
   private syncPending = false;
+  private homepageInjector: HomepageTimerInjector | null = null;
+
+  setHomepageInjector(injector: HomepageTimerInjector): void {
+    this.homepageInjector = injector;
+  }
 
   start(): void {
     this.syncButtons();
@@ -264,6 +281,11 @@ class StudioRefreshButtonInjector {
       srsLog("refresh success", { artifactTitle, activityType });
       btn.textContent = "✓";
       btn.style.color = "#15803d";
+      
+      if (this.homepageInjector) {
+        await this.homepageInjector.refresh();
+      }
+      
       setTimeout(() => {
         btn.style.color = "#a8c7fa";
         btn.disabled = false;

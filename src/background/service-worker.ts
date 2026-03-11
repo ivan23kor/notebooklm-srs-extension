@@ -171,6 +171,22 @@ async function handleActivityCompleted(message: ExtensionMessage & { type: "acti
 
   await saveState(state);
   await scheduleAllAlarms(state.timelines);
+
+  // Broadcast to all open NotebookLM tabs to refresh their timers
+  const tabs = await chrome.tabs.query({ url: "https://notebooklm.google.com/*" });
+  for (const tab of tabs) {
+    if (tab.id) {
+      chrome.tabs.sendMessage(tab.id, {
+        type: "state.refresh",
+        payload: {
+          contentItemKey: message.payload.contentItemKey,
+          occurredAt: message.payload.occurredAt
+        }
+      }).catch(() => {
+        // Tab may not have content script loaded, ignore errors
+      });
+    }
+  }
 }
 
 async function handleIntervalsUpdate(

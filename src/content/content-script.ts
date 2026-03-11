@@ -1,4 +1,5 @@
 import type {
+  ActivityType,
   DashboardState,
 } from "../shared/types";
 import { getNotebookTimerMap } from "./homepage-badges";
@@ -14,6 +15,13 @@ async function start(): Promise<void> {
   srsLog("init", location.href);
   const injector = new HomepageTimerInjector();
   await injector.refresh();
+
+  // Always start the studio injector — NotebookLM is a SPA, so the user
+  // may navigate to a notebook page after the content script has loaded.
+  const studioInjector = new StudioRefreshButtonInjector();
+  studioInjector.start();
+  srsLog("studio injector started");
+
   srsLog("ready");
 }
 
@@ -113,6 +121,146 @@ class HomepageTimerInjector {
       (isOverdue
         ? "background:#fef2f2;color:#be123c;"
         : "background:#f0fdf4;color:#15803d;");
+  }
+}
+
+const ARTIFACT_TYPE_MAP: Record<string, ActivityType> = {
+  audio_magic_eraser: "podcast",
+  cards_star: "flashcards",
+  quiz: "quiz",
+};
+
+function inferActivityType(card: Element): ActivityType {
+  const iconEl = card.querySelector(".artifact-button-content .artifact-type-icon");
+  const iconText = iconEl?.textContent?.trim() ?? "";
+  return ARTIFACT_TYPE_MAP[iconText] ?? "review";
+}
+
+function extractCardTitle(card: Element): string {
+  const titleEl = card.querySelector(".artifact-item-title");
+  return titleEl?.textContent?.trim() ?? "";
+}
+
+function extractCardMeta(card: Element): string {
+  const metaEl = card.querySelector(".artifact-item-metadata");
+  return metaEl?.textContent?.trim() ?? "";
+}
+
+function getNotebookId(): string {
+  const match = location.pathname.match(/\/notebook\/([^/]+)/);
+  return match?.[1] ?? "";
+}
+
+function getNotebookTitle(): string {
+  const input = document.querySelector<HTMLInputElement>("input.title-input");
+  return input?.value?.trim() ?? "";
+}
+
+class StudioRefreshButtonInjector {
+  private observer: MutationObserver | null = null;
+  private syncPending = false;
+
+  start(): void {
+    this.syncButtons();
+    this.observer = new MutationObserver(() => {
+      this.scheduleSync();
+    });
+    this.observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  private scheduleSync(): void {
+    if (this.syncPending) return;
+    this.syncPending = true;
+    requestAnimationFrame(() => {
+      this.syncPending = false;
+      this.syncButtons();
+    });
+  }
+
+  private syncButtons(): void {
+    if (!location.pathname.startsWith("/notebook/")) return;
+
+    this.observer?.disconnect();
+
+    const cards = document.querySelectorAll("artifact-library-item");
+    for (const card of cards) {
+      if (card.querySelector("[data-srs-refresh]")) continue;
+
+      const actionsContainer = card.querySelector(".artifact-actions");
+      if (!actionsContainer) continue;
+
+      const moreBtn = actionsContainer.querySelector<HTMLElement>("button[aria-label='More']");
+
+      const btn = document.createElement("button");
+      btn.setAttribute("data-srs-refresh", "true");
+      btn.setAttribute("aria-label", "Mark as refreshed (SRS)");
+      btn.setAttribute("title", "Mark as refreshed (SRS)");
+      btn.type = "button";
+      btn.style.cssText =
+        "background:#2d2e30;border:none;cursor:pointer;padding:0;border-radius:50%;" +
+        "width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;" +
+        "color:#a8c7fa;font-size:18px;transition:background 0.15s;margin-left:4px;";
+      btn.textContent = "✓";
+      btn.addEventListener("mouseenter", () => {
+        btn.style.background = "#3c3d40";
+      });
+      btn.addEventListener("mouseleave", () => {
+        btn.style.background = "#2d2e30";
+      });
+
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        void this.handleRefreshClick(card, btn);
+      });
+
+      if (moreBtn) {
+        moreBtn.insertAdjacentElement("beforebegin", btn);
+      } else {
+        actionsContainer.appendChild(btn);
+      }
+    }
+
+    this.observer?.observe(document.body, { childList: true, subtree: true });
+  }
+
+  private async handleRefreshClick(card: Element, btn: HTMLButtonElement): Promise<void> {
+    const artifactTitle = extractCardTitle(card);
+    const activityType = inferActivityType(card);
+    const notebookId = getNotebookId();
+    const notebookTitle = getNotebookTitle();
+
+    srsLog("refresh click", { artifactTitle, activityType, notebookId, notebookTitle });
+
+    btn.disabled = true;
+    btn.style.opacity = "0.5";
+
+    const response = await sendMessage({
+      type: "activity.completed",
+      payload: {
+        activityType,
+        contentItemKey: notebookId,
+        contentTitle: notebookTitle || artifactTitle,
+        sourceUrl: location.href,
+        detectedSignal: "manual-studio-refresh",
+        occurredAt: Date.now(),
+      },
+    });
+
+    if (response.ok) {
+      srsLog("refresh success", { artifactTitle, activityType });
+      btn.textContent = "✓";
+      btn.style.color = "#15803d";
+      setTimeout(() => {
+        btn.style.color = "#a8c7fa";
+        btn.disabled = false;
+        btn.style.opacity = "1";
+      }, 1500);
+    } else {
+      console.warn(LOG_PREFIX, "refresh failed", response.error);
+      btn.disabled = false;
+      btn.style.opacity = "1";
+    }
   }
 }
 

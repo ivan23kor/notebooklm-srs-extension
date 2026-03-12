@@ -244,8 +244,43 @@ async function handleCompleteTimeline(timelineId: string): Promise<DashboardStat
 
   const refreshed = refreshTimeline(timeline, current);
   state.timelines[timelineId] = refreshed;
+
+  // Reset all sibling timelines sharing the same contentItemKey (notebook).
+  // Marking any activity (quiz, podcast, etc.) as complete should reset
+  // the SRS timer for the entire notebook.
+  for (const [id, sibling] of Object.entries(state.timelines)) {
+    if (id !== timelineId && sibling.contentItemKey === timeline.contentItemKey) {
+      sibling.lastCompletionAt = current;
+      sibling.history = [
+        ...sibling.history,
+        {
+          completedAt: current,
+          detectedFromUrl: sibling.sourceUrl,
+          detectedSignal: "sibling-reset:manual-complete"
+        }
+      ].slice(-20);
+      state.timelines[id] = refreshTimeline(sibling, current);
+    }
+  }
+
   await saveState(state);
-  await scheduleAlarm(refreshed);
+  await scheduleAllAlarms(state.timelines);
+
+  // Broadcast to all open NotebookLM tabs to refresh their timers
+  const tabs = await chrome.tabs.query({ url: "https://notebooklm.google.com/*" });
+  for (const tab of tabs) {
+    if (tab.id) {
+      chrome.tabs.sendMessage(tab.id, {
+        type: "state.refresh",
+        payload: {
+          contentItemKey: timeline.contentItemKey,
+          occurredAt: current
+        }
+      }).catch(() => {
+        // Tab may not have content script loaded, ignore errors
+      });
+    }
+  }
 
   const grouped = groupTimelines(Object.values(state.timelines), current);
   grouped.settings = state.settings;

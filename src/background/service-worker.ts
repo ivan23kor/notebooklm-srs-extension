@@ -133,12 +133,16 @@ async function rebuildDashboardState(): Promise<DashboardState> {
 }
 
 async function handleActivityCompleted(message: ExtensionMessage & { type: "activity.completed" }): Promise<void> {
+  console.log("[SRS-DEBUG] handleActivityCompleted called", JSON.stringify(message.payload));
   const state = await loadState();
   const current = now();
   const timeline = buildTimelineFromCompletion(message.payload, state.settings.intervalDays, current);
   const existing = state.timelines[timeline.id];
+  console.log("[SRS-DEBUG] timeline.id =", timeline.id, "contentItemKey =", message.payload.contentItemKey, "existing =", !!existing);
+  console.log("[SRS-DEBUG] new lastCompletionAt =", timeline.lastCompletionAt, "=", new Date(timeline.lastCompletionAt).toISOString());
 
   if (existing) {
+    console.log("[SRS-DEBUG] existing.lastCompletionAt =", existing.lastCompletionAt, "=", new Date(existing.lastCompletionAt).toISOString());
     timeline.history = [
       ...existing.history,
       {
@@ -154,8 +158,10 @@ async function handleActivityCompleted(message: ExtensionMessage & { type: "acti
   // Reset all sibling timelines sharing the same contentItemKey (notebook).
   // Marking any activity (quiz, podcast, etc.) as complete should reset
   // the SRS timer for the entire notebook.
+  const siblingIds: string[] = [];
   for (const [id, sibling] of Object.entries(state.timelines)) {
     if (id !== timeline.id && sibling.contentItemKey === message.payload.contentItemKey) {
+      siblingIds.push(id);
       sibling.lastCompletionAt = message.payload.occurredAt;
       sibling.history = [
         ...sibling.history,
@@ -168,12 +174,15 @@ async function handleActivityCompleted(message: ExtensionMessage & { type: "acti
       state.timelines[id] = refreshTimeline(sibling, current);
     }
   }
+  console.log("[SRS-DEBUG] sibling timelines reset:", siblingIds);
 
   await saveState(state);
+  console.log("[SRS-DEBUG] state saved. All timeline IDs:", Object.keys(state.timelines));
   await scheduleAllAlarms(state.timelines);
 
   // Broadcast to all open NotebookLM tabs to refresh their timers
   const tabs = await chrome.tabs.query({ url: "https://notebooklm.google.com/*" });
+  console.log("[SRS-DEBUG] broadcasting state.refresh to", tabs.length, "tabs:", tabs.map(t => `${t.id}:${t.url}`));
   for (const tab of tabs) {
     if (tab.id) {
       chrome.tabs.sendMessage(tab.id, {
@@ -182,8 +191,8 @@ async function handleActivityCompleted(message: ExtensionMessage & { type: "acti
           contentItemKey: message.payload.contentItemKey,
           occurredAt: message.payload.occurredAt
         }
-      }).catch(() => {
-        // Tab may not have content script loaded, ignore errors
+      }).catch((err) => {
+        console.warn("[SRS-DEBUG] failed to send state.refresh to tab", tab.id, err);
       });
     }
   }

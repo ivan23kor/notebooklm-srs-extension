@@ -34,12 +34,27 @@ class HomepageTimerInjector {
   constructor() {
     this.bindNotebookTableObserver();
     this.setupStateRefreshListener();
+    this.setupUrlChangeListener();
+  }
+
+  private setupUrlChangeListener(): void {
+    let lastPathname = location.pathname;
+    // Poll for URL changes since SPA navigation doesn't always trigger events
+    setInterval(() => {
+      if (location.pathname !== lastPathname) {
+        lastPathname = location.pathname;
+        if (lastPathname === "/") {
+          srsLog("[DEBUG] URL changed to homepage, refreshing timers");
+          void this.refresh();
+        }
+      }
+    }, 1000);
   }
 
   private setupStateRefreshListener(): void {
     chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown }) => {
       if (message.type === "state.refresh") {
-        srsLog("received state.refresh, refreshing timers");
+        srsLog("received state.refresh, refreshing timers. pathname =", location.pathname);
         void this.refresh();
       }
       return true;
@@ -47,12 +62,18 @@ class HomepageTimerInjector {
   }
 
   async refresh(): Promise<void> {
+    srsLog("[DEBUG] refresh() called, pathname =", location.pathname);
     const response = await sendMessage({ type: "dashboard.get" });
     if (!response.ok || !response.data) {
       console.warn(LOG_PREFIX, response.error ?? "Failed to load state");
       return;
     }
 
+    srsLog("[DEBUG] dashboard.get response:", JSON.stringify({
+      overdue: response.data.overdue?.map(t => ({ id: t.id, title: t.contentTitle, lastCompletionAt: t.lastCompletionAt })),
+      due: response.data.due?.map(t => ({ id: t.id, title: t.contentTitle, lastCompletionAt: t.lastCompletionAt })),
+      upcoming: response.data.upcoming?.map(t => ({ id: t.id, title: t.contentTitle, lastCompletionAt: t.lastCompletionAt })),
+    }));
     this.latestDashboardState = response.data;
     this.syncHomepageTimers();
   }
@@ -77,14 +98,17 @@ class HomepageTimerInjector {
 
   private syncHomepageTimers(): void {
     if (!this.latestDashboardState) {
+      srsLog("[DEBUG] syncHomepageTimers: no dashboard state, skipping");
       return;
     }
 
     if (location.pathname !== "/") {
+      srsLog("[DEBUG] syncHomepageTimers: not on homepage (pathname =", location.pathname + "), skipping");
       return;
     }
 
     const timerMap = getNotebookTimerMap(this.latestDashboardState, Date.now());
+    srsLog("[DEBUG] syncHomepageTimers: timerMap size =", timerMap.size, "entries:", [...timerMap.entries()].map(([k, v]) => `${k}: ${v.label} overdue=${v.isOverdue}`));
     if (timerMap.size === 0) {
       return;
     }
@@ -277,12 +301,14 @@ class StudioRefreshButtonInjector {
       },
     });
 
+    srsLog("[DEBUG] activity.completed response:", JSON.stringify(response));
     if (response.ok) {
       srsLog("refresh success", { artifactTitle, activityType });
       btn.textContent = "✓";
       btn.style.color = "#15803d";
       
       if (this.homepageInjector) {
+        srsLog("[DEBUG] calling homepageInjector.refresh() after activity.completed");
         await this.homepageInjector.refresh();
       }
       

@@ -2,7 +2,7 @@ import { mkdirSync, cpSync } from "node:fs";
 import { resolve } from "node:path";
 
 const outdir = resolve("dist");
-const entrypoints = [resolve("src/background.ts"), resolve("src/content.ts")];
+const entrypoints = [resolve("src/background.ts"), resolve("src/content.ts"), resolve("src/content/page-bridge.ts")];
 
 function copyStatic(): void {
   mkdirSync(outdir, { recursive: true });

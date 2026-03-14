@@ -420,15 +420,18 @@ export class MultiSelectManager {
       title: this.rowCheckboxes.get(id)?.title ?? id,
     }));
 
-    log("Moving notebooks to trash:", toDelete.length);
+    log("Moving notebooks to trash:", toDelete.length, "IDs:", toDelete.map(d => d.id));
 
     // Pause observer during bulk delete to prevent DOM sync interference
     this.observer?.disconnect();
 
     const atToken = await this.getAtToken();
+    log("Retrieved auth token:", atToken ? `${atToken.substring(0, 10)}...` : "NULL");
+    
     if (!atToken) {
       console.error(LOG_PREFIX, "Failed to get auth token, cannot delete");
       this.observer?.observe(document.body, { childList: true, subtree: true });
+      alert("Failed to get authentication token. Please refresh the page and try again.");
       return;
     }
 
@@ -437,9 +440,14 @@ export class MultiSelectManager {
 
     for (const { id, title } of toDelete) {
       try {
-        await this.deleteNotebookViaRpc(id, atToken);
-        successCount++;
-        log("Notebook deleted:", title);
+        const result = await this.deleteNotebookViaRpc(id, atToken);
+        if (result.success) {
+          successCount++;
+          log("Notebook deleted:", title, "Result:", result.data);
+        } else {
+          failCount++;
+          console.error(LOG_PREFIX, "Delete failed for:", title, "Error:", result.error);
+        }
       } catch (error) {
         console.error(LOG_PREFIX, "Failed to delete notebook:", title, error);
         failCount++;
@@ -447,6 +455,10 @@ export class MultiSelectManager {
     }
 
     log("Bulk delete completed:", { success: successCount, failed: failCount });
+
+    if (failCount > 0 && successCount === 0) {
+      alert(`Failed to delete all ${failCount} notebook(s). Check console for details.`);
+    }
 
     this.clearSelection();
 

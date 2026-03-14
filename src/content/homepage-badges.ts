@@ -1,3 +1,4 @@
+import { getNotebookTitleKey } from "../shared/notebook-title";
 import { sanitizeIntervals } from "../shared/time";
 import type { DashboardState, DashboardTimeline } from "../shared/types";
 
@@ -85,12 +86,32 @@ export function getNotebookTimerMap(
   const items = [...data.overdue, ...data.due, ...data.upcoming];
 
   for (const item of items) {
-    const key = item.contentTitle.trim().toLowerCase();
+    const key = getNotebookTitleKey(item.contentTitle);
     const badge = formatTimerBadge(item, data.settings.intervalDays, now);
     const existing = map.get(key);
 
     if (!existing || compareBadgePriority(badge, existing) < 0) {
       map.set(key, badge);
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Build a map from notebook title (lowercase) to notebook ID.
+ * Extracts notebook ID from timeline.id which is in format "review:notebook-id" or "quiz:notebook-id".
+ */
+export function getNotebookIdMap(data: DashboardState): Map<string, string> {
+  const map = new Map<string, string>();
+  const items = [...data.overdue, ...data.due, ...data.upcoming];
+
+  for (const item of items) {
+    const key = getNotebookTitleKey(item.contentTitle);
+    // Extract notebook ID from timeline.id (format: "activityType:notebookId")
+    const notebookId = item.id.split(":").slice(1).join(":");
+    if (notebookId && !map.has(key)) {
+      map.set(key, notebookId);
     }
   }
 

@@ -3,6 +3,8 @@
  * Adds checkboxes to notebook rows and bulk actions
  */
 
+import { getNotebookTitleKey } from "../shared/notebook-title";
+
 const LOG_PREFIX = "[Multi-Select]";
 
 function log(...args: unknown[]): void {
@@ -22,9 +24,64 @@ export class MultiSelectManager {
   private actionToolbar: HTMLElement | null = null;
   private observer: MutationObserver | null = null;
   private rowCheckboxes = new Map<string, NotebookRow>();
+  private notebookIdMap = new Map<string, string>();
+  private diagDumpedTitles = new Set<string>();
 
   constructor() {
     this.init();
+  }
+
+  setNotebookIdMap(map: Map<string, string>): void {
+    const next = new Map(this.notebookIdMap);
+    for (const [key, value] of map) {
+      if (!next.has(key)) {
+        next.set(key, value);
+      }
+    }
+    this.notebookIdMap = next;
+    log("Updated notebook ID map with", map.size, "dashboard entries; total map size:", this.notebookIdMap.size);
+  }
+
+  mergeDiscoveredNotebooks(entries: Array<{ id: string; title: string }>): void {
+    let added = 0;
+    for (const { id, title } of entries) {
+      const key = getNotebookTitleKey(title);
+      if (key && !this.notebookIdMap.has(key)) {
+        this.notebookIdMap.set(key, id);
+        added++;
+      }
+    }
+    if (added > 0) {
+      log("Merged", added, "discovered notebook IDs, map size:", this.notebookIdMap.size);
+      this.retryUnresolvedRows();
+    }
+  }
+
+  private retryUnresolvedRows(): void {
+    let resolved = 0;
+    const unresolved = [...this.rowCheckboxes.entries()].filter(([id]) => this.isPlaceholderId(id));
+    log("Retrying", unresolved.length, "unresolved rows");
+    
+    for (const [id, data] of unresolved) {
+      const titleKey = getNotebookTitleKey(data.title);
+      const newId = this.resolveNotebookId(data.row, titleKey);
+      log("Retry for", data.title, "-> oldId:", id, "newId:", newId, "isPlaceholder:", this.isPlaceholderId(newId || ""));
+      
+      if (newId && !this.isPlaceholderId(newId)) {
+        const wasSelected = this.selectedNotebooks.has(id);
+        this.rowCheckboxes.delete(id);
+        this.selectedNotebooks.delete(id);
+        this.rowCheckboxes.set(newId, { ...data, notebookId: newId });
+        if (wasSelected) {
+          this.selectedNotebooks.add(newId);
+        }
+        resolved++;
+        log("RESOLVED:", data.title, "->", newId);
+      }
+    }
+    if (resolved > 0) {
+      log("Re-resolved", resolved, "previously-unresolved notebook(s)");
+    }
   }
 
   private init(): void {
@@ -118,14 +175,204 @@ export class MultiSelectManager {
   private extractRowTitle(row: HTMLElement): string {
     const titleCell = row.querySelector("td.mat-mdc-cell:first-child");
     if (!titleCell) return "";
-    const text = titleCell.textContent?.trim() ?? "";
-    return text;
+    const clone = titleCell.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll("[data-srs-timer], [data-multi-select-checkbox]")
+      .forEach(el => el.remove());
+    return clone.textContent?.trim() ?? "";
   }
 
   private generateNotebookId(row: HTMLElement, title: string): string {
-    const onclick = row.getAttribute("onclick") ?? "";
-    const match = onclick.match(/\/notebook\/([a-zA-Z0-9_-]+)/);
-    return match?.[1] ?? `notebook-${title.toLowerCase().replace(/\s+/g, "-")}`;
+    const titleKey = getNotebookTitleKey(title);
+    const resolved = this.resolveNotebookId(row, titleKey);
+    if (resolved) return resolved;
+
+    const placeholder = this.createPlaceholderId(titleKey);
+    if (!this.diagDumpedTitles.has(titleKey)) {
+      this.diagDumpedTitles.add(titleKey);
+      console.warn(LOG_PREFIX, "Could not find notebook ID for:", title, "Using placeholder:", placeholder);
+      this.dumpRowDiagnostics(row, title);
+    }
+    return placeholder;
+  }
+
+  private dumpRowDiagnostics(row: HTMLElement, title: string): void {
+    const diag: Record<string, unknown> = {
+      title,
+      titleKey: getNotebookTitleKey(title),
+    };
+
+    // Row's own attributes
+    const rowAttrs: Record<string, string> = {};
+    for (const attr of Array.from(row.attributes)) {
+      rowAttrs[attr.name] = attr.value.slice(0, 200);
+    }
+    diag.rowAttrs = rowAttrs;
+
+    // Angular context on row and ancestors (up to 3 levels)
+    const ngContexts: unknown[] = [];
+    let el: HTMLElement | null = row;
+    for (let i = 0; i < 4 && el; i++) {
+      const ctx = (el as any).__ngContext__;
+      if (ctx) {
+        ngContexts.push({
+          tag: el.tagName,
+          contextType: typeof ctx,
+          isArray: Array.isArray(ctx),
+          length: Array.isArray(ctx) ? ctx.length : undefined,
+          sample: Array.isArray(ctx)
+            ? ctx.slice(0, 30).map((v: unknown) => {
+                if (v == null) return null;
+                if (typeof v === "string") return v.slice(0, 120);
+                if (typeof v === "number" || typeof v === "boolean") return v;
+                if (typeof v === "object" && v !== null) {
+                  const keys = Object.keys(v).slice(0, 10);
+                  return `{${keys.join(",")}}`;
+                }
+                return typeof v;
+              })
+            : String(ctx).slice(0, 200),
+        });
+      }
+      el = el.parentElement;
+    }
+    diag.ngContexts = ngContexts;
+
+    // Check project-action-button component inside row
+    const actionBtn = row.querySelector("project-action-button");
+    if (actionBtn) {
+      const btnCtx = (actionBtn as any).__ngContext__;
+      diag.actionBtnContext = btnCtx
+        ? {
+            isArray: Array.isArray(btnCtx),
+            length: Array.isArray(btnCtx) ? btnCtx.length : undefined,
+            sample: Array.isArray(btnCtx)
+              ? btnCtx.slice(0, 30).map((v: unknown) => {
+                  if (v == null) return null;
+                  if (typeof v === "string") return v.slice(0, 120);
+                  if (typeof v === "number" || typeof v === "boolean") return v;
+                  if (typeof v === "object" && v !== null) {
+                    const keys = Object.keys(v).slice(0, 10);
+                    return `{${keys.join(",")}}`;
+                  }
+                  return typeof v;
+                })
+              : String(btnCtx).slice(0, 200),
+          }
+        : "no __ngContext__";
+    }
+
+    // Check for any element with properties containing "notebook" or UUID patterns
+    const allEls = row.querySelectorAll<HTMLElement>("*");
+    const propsWithIds: string[] = [];
+    for (const child of allEls) {
+      for (const key of Object.getOwnPropertyNames(child)) {
+        if (key.startsWith("__") || key === "innerHTML" || key === "outerHTML") continue;
+        try {
+          const val = (child as any)[key];
+          if (typeof val === "string" && val.match(/[0-9a-f]{8}-[0-9a-f]{4}/i)) {
+            propsWithIds.push(`${child.tagName}.${key}=${val.slice(0, 100)}`);
+          }
+        } catch {}
+      }
+    }
+    if (propsWithIds.length) diag.propsWithUUIDs = propsWithIds;
+
+    // ID map state
+    diag.idMapSize = this.notebookIdMap.size;
+    diag.idMapKeys = [...this.notebookIdMap.keys()].slice(0, 5);
+
+    console.warn(LOG_PREFIX, "[DIAG] Row diagnostics for:", title, diag);
+  }
+
+  private resolveNotebookId(row: HTMLElement, titleKey: string): string | null {
+    // 1. Link href inside the row
+    const link = row.querySelector('a[href*="/notebook/"]');
+    if (link) {
+      const fromLink = this.extractNotebookIdFromValue(link.getAttribute("href") ?? "");
+      if (fromLink) return fromLink;
+    }
+
+    // 2. Attribute scan across the row subtree
+    const fromAttributes = this.extractNotebookIdFromAttributes(row);
+    if (fromAttributes) return fromAttributes;
+
+    // 3. ID map from dashboard state (fallback; may not be a real notebook ID)
+    const idFromMap = this.notebookIdMap.get(titleKey);
+    if (idFromMap) return idFromMap;
+
+    // 4. Row innerHTML as last resort (only if it contains notebook hints)
+    if (row.innerHTML.includes("notebook")) {
+      const fromHtml = this.extractNotebookIdFromValue(row.innerHTML);
+      if (fromHtml) return fromHtml;
+    }
+
+    return null;
+  }
+
+  private extractNotebookIdFromAttributes(root: HTMLElement): string | null {
+    const elements = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
+    for (const el of elements) {
+      for (const attr of Array.from(el.attributes)) {
+        if (!attr.value) continue;
+        const id = this.extractNotebookIdFromAttribute(attr.name, attr.value);
+        if (id) return id;
+      }
+    }
+    return null;
+  }
+
+  private extractNotebookIdFromAttribute(name: string, value: string): string | null {
+    const nameLower = name.toLowerCase();
+    const allowBare = nameLower.includes("notebook");
+    if (!allowBare) {
+      const lower = value.toLowerCase();
+      if (!lower.includes("notebook") && !lower.includes("/notebook/")) {
+        return null;
+      }
+    }
+    return this.extractNotebookIdFromValue(value, allowBare);
+  }
+
+  private extractNotebookIdFromValue(value: string, allowBare = false): string | null {
+    if (!value) return null;
+    const decoded = this.safeDecodeURIComponent(value);
+
+    const linkMatch = decoded.match(/\/notebook\/([a-zA-Z0-9_-]+)/);
+    if (linkMatch?.[1]) return linkMatch[1];
+
+    const jsonMatch = decoded.match(/notebookId\"?\s*[:=]\s*\"([a-zA-Z0-9_-]+)\"/i);
+    if (jsonMatch?.[1]) return jsonMatch[1];
+
+    if (allowBare) {
+      const uuidMatch = decoded.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      if (uuidMatch?.[0]) return uuidMatch[0];
+    }
+
+    return null;
+  }
+
+  private safeDecodeURIComponent(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private createPlaceholderId(titleLower: string): string {
+    const ascii = titleLower
+      .normalize("NFKD")
+      .replace(/[^\x00-\x7F]/g, "")
+      .trim();
+    const slug = ascii
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60);
+    return `unresolved-${slug || "notebook"}`;
+  }
+
+  private isPlaceholderId(id: string): boolean {
+    return id.startsWith("unresolved-");
   }
 
   private addCheckboxToRow(row: HTMLElement, title: string, notebookId: string): void {
@@ -418,6 +665,7 @@ export class MultiSelectManager {
     const toDelete = [...this.selectedNotebooks].map((id) => ({
       id,
       title: this.rowCheckboxes.get(id)?.title ?? id,
+      row: this.rowCheckboxes.get(id)?.row ?? null,
     }));
 
     log("Moving notebooks to trash:", toDelete.length, "IDs:", toDelete.map(d => d.id));
@@ -437,16 +685,27 @@ export class MultiSelectManager {
 
     let successCount = 0;
     let failCount = 0;
+    let skippedCount = 0;
 
-    for (const { id, title } of toDelete) {
+    for (const { id, title, row } of toDelete) {
       try {
-        const result = await this.deleteNotebookViaRpc(id, atToken);
+        const resolvedId = this.isPlaceholderId(id) && row
+          ? this.resolveNotebookId(row, title.toLowerCase())
+          : id;
+
+        if (!resolvedId || this.isPlaceholderId(resolvedId)) {
+          skippedCount++;
+          console.warn(LOG_PREFIX, "Skipping delete; could not resolve notebook ID for:", title);
+          continue;
+        }
+
+        const result = await this.deleteNotebookViaRpc(resolvedId, atToken);
         if (result.success) {
           successCount++;
-          log("Notebook deleted:", title, "Result:", result.data);
+          log("Notebook deleted:", title, "ID:", resolvedId, "Result:", result.data);
         } else {
           failCount++;
-          console.error(LOG_PREFIX, "Delete failed for:", title, "Error:", result.error);
+          console.error(LOG_PREFIX, "Delete failed for:", title, "ID:", resolvedId, "Error:", result.error);
         }
       } catch (error) {
         console.error(LOG_PREFIX, "Failed to delete notebook:", title, error);
@@ -454,9 +713,14 @@ export class MultiSelectManager {
       }
     }
 
-    log("Bulk delete completed:", { success: successCount, failed: failCount });
+    log("Bulk delete completed:", { success: successCount, failed: failCount, skipped: skippedCount });
 
-    if (failCount > 0 && successCount === 0) {
+    if (skippedCount > 0) {
+      alert(
+        `Skipped ${skippedCount} notebook(s) because their IDs could not be resolved. ` +
+          `Open each notebook once or refresh the page, then try again.`,
+      );
+    } else if (failCount > 0 && successCount === 0) {
       alert(`Failed to delete all ${failCount} notebook(s). Check console for details.`);
     }
 
@@ -470,10 +734,16 @@ export class MultiSelectManager {
     }
   }
 
-  private async deleteNotebookViaRpc(notebookId: string, atToken: string): Promise<void> {
+  private async deleteNotebookViaRpc(
+    notebookId: string,
+    atToken: string,
+  ): Promise<{ success: boolean; data?: unknown; error?: string }> {
     const rpcId = "WWINqb";
-    const args = JSON.stringify([[notebookId], [2]]);
+    // Args format: [notebookId, action] where action 2 = move to trash
+    const args = JSON.stringify([notebookId, 2]);
     const fReq = JSON.stringify([[[rpcId, args, null, "generic"]]]);
+
+    log("RPC request for notebook:", notebookId);
 
     const formData = new URLSearchParams();
     formData.set("f.req", fReq);
@@ -487,21 +757,51 @@ export class MultiSelectManager {
       _reqid: String(Math.floor(Math.random() * 900000) + 100000),
     });
 
-    const response = await fetch(
-      `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${params}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-          "x-same-domain": "1",
-        },
-        body: formData.toString(),
+    const url = `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${params}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "x-same-domain": "1",
       },
-    );
+      body: formData.toString(),
+    });
 
     if (!response.ok) {
-      throw new Error(`RPC failed: ${response.status}`);
+      return { success: false, error: `HTTP ${response.status}` };
     }
+
+    const text = await response.text();
+    log("RPC response (first 500 chars):", text.substring(0, 500));
+
+    if (!text.includes(")]}'")) {
+      return { success: false, error: "Unexpected response format" };
+    }
+
+    const lines = text.split("\n");
+    for (const line of lines) {
+      if (!line.includes(rpcId)) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const wrb = parsed.find(
+          (item: unknown) => Array.isArray(item) && item[0] === "wrb.fr",
+        );
+        if (
+          wrb &&
+          Array.isArray(wrb[5]) &&
+          typeof wrb[5][0] === "number" &&
+          wrb[5][0] !== 0
+        ) {
+          return { success: false, data: parsed, error: `RPC error status ${wrb[5][0]}` };
+        }
+        return { success: true, data: parsed };
+      } catch {
+        return { success: false, error: "Failed to parse RPC response" };
+      }
+    }
+
+    return { success: false, error: "RPC ID not found in response" };
   }
 
   private getAtToken(): Promise<string | null> {

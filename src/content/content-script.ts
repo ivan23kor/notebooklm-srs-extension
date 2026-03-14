@@ -3,6 +3,7 @@ import type {
   DashboardState,
 } from "../shared/types";
 import { getNotebookTimerMap } from "./homepage-badges";
+import { MultiSelectManager } from "./multi-select";
 
 const APP_HOST = "notebooklm.google.com";
 const LOG_PREFIX = "[SRS]";
@@ -15,6 +16,9 @@ async function start(): Promise<void> {
   srsLog("init", location.href);
   const homepageInjector = new HomepageTimerInjector();
   await homepageInjector.refresh();
+
+  // Initialize multi-select manager
+  new MultiSelectManager();
 
   // Always start the studio injector — NotebookLM is a SPA, so the user
   // may navigate to a notebook page after the content script has loaded.
@@ -108,7 +112,6 @@ class HomepageTimerInjector {
     }
 
     const timerMap = getNotebookTimerMap(this.latestDashboardState, Date.now());
-    srsLog("[DEBUG] syncHomepageTimers: timerMap size =", timerMap.size, "entries:", [...timerMap.entries()].map(([k, v]) => `${k}: ${v.label} overdue=${v.isOverdue}`));
     if (timerMap.size === 0) {
       return;
     }

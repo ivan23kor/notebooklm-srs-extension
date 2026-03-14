@@ -35,6 +35,8 @@ export class MultiSelectManager {
 
     // Initial sync after a short delay to ensure DOM is ready
     setTimeout(() => this.syncRows(), 500);
+    // Retry select-all checkbox after delay in case table wasn't ready initially
+    setTimeout(() => this.injectSelectAllCheckbox(true), 500);
 
     // Also sync when URL changes (SPA navigation)
     let lastPathname = location.pathname;
@@ -44,6 +46,7 @@ export class MultiSelectManager {
         if (lastPathname === "/") {
           log("URL changed to homepage, syncing rows");
           setTimeout(() => this.syncRows(), 300);
+          setTimeout(() => this.injectSelectAllCheckbox(true), 300);
         }
       }
     }, 500);
@@ -70,15 +73,17 @@ export class MultiSelectManager {
   private syncRows(): void {
     if (location.pathname !== "/") return;
 
-    const table = document.querySelector("table.mat-mdc-table");
-    if (!table) return;
+    const tables = document.querySelectorAll("table.mat-mdc-table");
+    if (tables.length === 0) return;
 
     this.observer?.disconnect();
 
-    const rows = table.querySelectorAll<HTMLElement>("tr.mat-mdc-row");
     const processedIds = new Set<string>();
 
-    for (const row of rows) {
+    for (const table of tables) {
+      const rows = table.querySelectorAll<HTMLElement>("tr.mat-mdc-row");
+
+      for (const row of rows) {
       const title = this.extractRowTitle(row);
       if (!title) continue;
 
@@ -93,7 +98,8 @@ export class MultiSelectManager {
       }
 
       this.addCheckboxToRow(row, title, notebookId);
-      processedIds.add(notebookId);
+        processedIds.add(notebookId);
+      }
     }
 
     for (const [id, data] of this.rowCheckboxes) {
@@ -314,52 +320,74 @@ export class MultiSelectManager {
     this.injectSelectAllCheckbox();
   }
 
-  private injectSelectAllCheckbox(): void {
-    if (document.querySelector("[data-select-all-checkbox]")) return;
+  private injectSelectAllCheckbox(forceRetry = false): void {
+    const existing = document.querySelector("[data-select-all-checkbox]");
+    if (existing && !forceRetry) return;
 
-    const tableHeader = document.querySelector("table.mat-mdc-table thead tr");
-    if (!tableHeader) return;
-
-    const actionsHeader = tableHeader.querySelector("th:last-child") as HTMLElement;
-    if (!actionsHeader) return;
-
-    const label = document.createElement("label");
-    label.setAttribute("data-select-all-checkbox", "true");
-    label.style.cssText = `
-      display: flex;
-      align-items: center;
-      cursor: pointer;
-      gap: 8px;
-      font-size: 12px;
-      color: #5f6368;
-    `;
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.style.cssText = `
-      width: 18px;
-      height: 18px;
-      cursor: pointer;
-      accent-color: #1a73e8;
-    `;
-
-    const text = document.createElement("span");
-    text.textContent = "Select All";
-
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) {
-        this.selectAll();
-      } else {
-        this.clearSelection();
+    const tableHeaders = document.querySelectorAll("table.mat-mdc-table thead tr");
+    if (tableHeaders.length === 0) {
+      // Table not ready yet, schedule another attempt
+      if (!forceRetry) {
+        setTimeout(() => this.injectSelectAllCheckbox(true), 300);
       }
-    });
+      return;
+    }
+
+    // If forcing retry, remove existing checkboxes first to re-add
+    if (forceRetry && existing) {
+      existing.remove();
+      this.selectAllCheckbox = null;
+    }
+
+    // Process all table headers (Featured notebooks and My notebooks)
+    for (const tableHeader of tableHeaders) {
+      const actionsHeader = tableHeader.querySelector("th:last-child") as HTMLElement;
+      if (!actionsHeader) continue;
+
+      // Check if we already added a checkbox to this header
+      if (actionsHeader.querySelector("[data-select-all-checkbox]")) continue;
+
+      const label = document.createElement("label");
+      label.setAttribute("data-select-all-checkbox", "true");
+      label.style.cssText = `
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        gap: 8px;
+        font-size: 12px;
+        color: #5f6368;
+      `;
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.style.cssText = `
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+        accent-color: #1a73e8;
+      `;
+
+      const text = document.createElement("span");
+      text.textContent = "Select All";
+
+      // Store reference to first checkbox (for "My notebooks" table which user likely interacts with)
+      if (!this.selectAllCheckbox) {
+        this.selectAllCheckbox = checkbox;
+      }
+
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          this.selectAll();
+        } else {
+          this.clearSelection();
+        }
+      });
 
     label.appendChild(checkbox);
-    label.appendChild(text);
-    actionsHeader.innerHTML = "";
-    actionsHeader.appendChild(label);
-
-    this.selectAllCheckbox = checkbox;
+      label.appendChild(text);
+      actionsHeader.innerHTML = "";
+      actionsHeader.appendChild(label);
+    }
   }
 
   private selectAll(): void {
@@ -386,21 +414,34 @@ export class MultiSelectManager {
     const selectedCount = this.selectedNotebooks.size;
     if (selectedCount === 0) return;
 
-    log("Moving notebooks to trash:", selectedCount);
+    // Snapshot selected IDs before any async work (syncRows rAF can clear them)
+    const toDelete = [...this.selectedNotebooks].map((id) => ({
+      id,
+      title: this.rowCheckboxes.get(id)?.title ?? id,
+    }));
+
+    log("Moving notebooks to trash:", toDelete.length);
+
+    // Pause observer during bulk delete to prevent DOM sync interference
+    this.observer?.disconnect();
+
+    const atToken = await this.getAtToken();
+    if (!atToken) {
+      console.error(LOG_PREFIX, "Failed to get auth token, cannot delete");
+      this.observer?.observe(document.body, { childList: true, subtree: true });
+      return;
+    }
 
     let successCount = 0;
     let failCount = 0;
 
-    for (const [id, data] of this.rowCheckboxes) {
-      if (!this.selectedNotebooks.has(id)) continue;
-
+    for (const { id, title } of toDelete) {
       try {
-        await this.deleteNotebook(data.row, data.title);
+        await this.deleteNotebookViaRpc(id, atToken);
         successCount++;
-        // Wait between deletions to avoid overwhelming the UI
-        await this.delay(300);
+        log("Notebook deleted:", title);
       } catch (error) {
-        console.error(LOG_PREFIX, "Failed to delete notebook:", data.title, error);
+        console.error(LOG_PREFIX, "Failed to delete notebook:", title, error);
         failCount++;
       }
     }
@@ -408,86 +449,62 @@ export class MultiSelectManager {
     log("Bulk delete completed:", { success: successCount, failed: failCount });
 
     this.clearSelection();
-    setTimeout(() => {
-      this.syncRows();
-    }, 500);
-  }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  private async deleteNotebook(row: HTMLElement, title: string): Promise<void> {
-    const moreBtn = row.querySelector<HTMLElement>("button[aria-label='Project Actions Menu']");
-    if (!moreBtn) {
-      throw new Error("More button not found");
+    // Re-enable observer and sync after delete completes
+    this.observer?.observe(document.body, { childList: true, subtree: true });
+    // Reload page to reflect deletions
+    if (successCount > 0) {
+      location.reload();
     }
+  }
 
-    moreBtn.click();
-    await this.waitForMenu();
+  private async deleteNotebookViaRpc(notebookId: string, atToken: string): Promise<void> {
+    const rpcId = "WWINqb";
+    const args = JSON.stringify([[notebookId], [2]]);
+    const fReq = JSON.stringify([[[rpcId, args, null, "generic"]]]);
 
-    const deleteBtn = Array.from(document.querySelectorAll<HTMLElement>("button")).find(
-      (btn) => btn.textContent?.toLowerCase().includes("trash") || btn.textContent?.toLowerCase().includes("delete")
+    const formData = new URLSearchParams();
+    formData.set("f.req", fReq);
+    formData.set("at", atToken);
+
+    const params = new URLSearchParams({
+      rpcids: rpcId,
+      "source-path": "/",
+      hl: "en",
+      authuser: "0",
+      _reqid: String(Math.floor(Math.random() * 900000) + 100000),
+    });
+
+    const response = await fetch(
+      `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${params}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "x-same-domain": "1",
+        },
+        body: formData.toString(),
+      },
     );
 
-    if (!deleteBtn) {
-      moreBtn.blur();
-      throw new Error("Delete button not found");
+    if (!response.ok) {
+      throw new Error(`RPC failed: ${response.status}`);
     }
-
-    deleteBtn.click();
-    await this.waitForConfirmation();
-
-    // Find and click the confirm button in the dialog
-    const confirmBtn = await this.waitForConfirmButton();
-    if (confirmBtn) {
-      confirmBtn.click();
-      await this.delay(200); // Wait for dialog to close and action to complete
-    }
-
-    log("Notebook moved to trash:", title);
   }
 
-  private waitForConfirmButton(): Promise<HTMLElement | null> {
+  private getAtToken(): Promise<string | null> {
     return new Promise((resolve) => {
-      const checkButton = () => {
-        // Look for confirm button in dialog
-        const buttons = Array.from(document.querySelectorAll<HTMLElement>("button"));
-        const confirmBtn = buttons.find(btn => {
-          const text = btn.textContent?.toLowerCase().trim() ?? "";
-          return (
-            (text === "move" || text === "delete" || text === "confirm" || text === "ok") &&
-            btn.offsetParent !== null
-          );
-        });
-
-        if (confirmBtn) {
-          resolve(confirmBtn);
-        } else {
-          requestAnimationFrame(checkButton);
-        }
+      const handler = (e: Event) => {
+        document.removeEventListener("__srs_at_token__", handler);
+        resolve((e as CustomEvent).detail as string | null);
       };
-      checkButton();
-    });
-  }
+      document.addEventListener("__srs_at_token__", handler);
+      document.dispatchEvent(new CustomEvent("__srs_request_at_token__"));
 
-  private waitForMenu(): Promise<void> {
-    return new Promise((resolve) => {
-      const checkMenu = () => {
-        const menu = document.querySelector("[role='menu']");
-        if (menu && menu.offsetParent !== null) {
-          resolve();
-        } else {
-          requestAnimationFrame(checkMenu);
-        }
-      };
-      checkMenu();
-    });
-  }
-
-  private waitForConfirmation(): Promise<void> {
-    return new Promise((resolve) => {
-      setTimeout(resolve, 100);
+      setTimeout(() => {
+        document.removeEventListener("__srs_at_token__", handler);
+        resolve(null);
+      }, 2000);
     });
   }
 

@@ -2,7 +2,7 @@ import type {
   ActivityType,
   DashboardState,
 } from "../shared/types";
-import { getNotebookTimerMap } from "./homepage-badges";
+import { getNotebookTimerMap, getNotebookIdMap } from "./homepage-badges";
 import { MultiSelectManager } from "./multi-select";
 
 const APP_HOST = "notebooklm.google.com";
@@ -12,13 +12,31 @@ function srsLog(...args: unknown[]): void {
   console.debug(LOG_PREFIX, ...args);
 }
 
+// Global dashboard state for sharing between components
+let globalDashboardState: DashboardState | null = null;
+
+export function getGlobalDashboardState(): DashboardState | null {
+  return globalDashboardState;
+}
+
 async function start(): Promise<void> {
   srsLog("init", location.href);
   const homepageInjector = new HomepageTimerInjector();
   await homepageInjector.refresh();
 
-  // Initialize multi-select manager
-  new MultiSelectManager();
+  // Initialize multi-select manager with access to dashboard state
+  const multiSelectManager = new MultiSelectManager();
+  homepageInjector.setMultiSelectManager(multiSelectManager);
+
+  // Listen for notebook IDs discovered by the MAIN-world page bridge
+  document.addEventListener("__srs_notebook_ids__", (e: Event) => {
+    const entries = (e as CustomEvent).detail as Array<{ id: string; title: string }>;
+    if (Array.isArray(entries) && entries.length > 0) {
+      srsLog("Received", entries.length, "notebook IDs from page bridge");
+      multiSelectManager.mergeDiscoveredNotebooks(entries);
+    }
+  });
+  document.dispatchEvent(new CustomEvent("__srs_request_notebook_ids__"));
 
   // Always start the studio injector — NotebookLM is a SPA, so the user
   // may navigate to a notebook page after the content script has loaded.
@@ -34,11 +52,16 @@ class HomepageTimerInjector {
   private notebookTableObserver: MutationObserver | null = null;
   private latestDashboardState: DashboardState | null = null;
   private timerSyncPending = false;
+  private multiSelectManager: MultiSelectManager | null = null;
 
   constructor() {
     this.bindNotebookTableObserver();
     this.setupStateRefreshListener();
     this.setupUrlChangeListener();
+  }
+
+  setMultiSelectManager(manager: MultiSelectManager): void {
+    this.multiSelectManager = manager;
   }
 
   private setupUrlChangeListener(): void {
@@ -48,7 +71,7 @@ class HomepageTimerInjector {
       if (location.pathname !== lastPathname) {
         lastPathname = location.pathname;
         if (lastPathname === "/") {
-          srsLog("[DEBUG] URL changed to homepage, refreshing timers");
+          srsLog("URL changed to homepage, refreshing timers");
           void this.refresh();
         }
       }
@@ -66,19 +89,21 @@ class HomepageTimerInjector {
   }
 
   async refresh(): Promise<void> {
-    srsLog("[DEBUG] refresh() called, pathname =", location.pathname);
     const response = await sendMessage({ type: "dashboard.get" });
     if (!response.ok || !response.data) {
       console.warn(LOG_PREFIX, response.error ?? "Failed to load state");
       return;
     }
 
-    srsLog("[DEBUG] dashboard.get response:", JSON.stringify({
-      overdue: response.data.overdue?.map(t => ({ id: t.id, title: t.contentTitle, lastCompletionAt: t.lastCompletionAt })),
-      due: response.data.due?.map(t => ({ id: t.id, title: t.contentTitle, lastCompletionAt: t.lastCompletionAt })),
-      upcoming: response.data.upcoming?.map(t => ({ id: t.id, title: t.contentTitle, lastCompletionAt: t.lastCompletionAt })),
-    }));
     this.latestDashboardState = response.data;
+    globalDashboardState = response.data;
+    
+    // Update multi-select manager with the notebook ID map
+    if (this.multiSelectManager) {
+      const idMap = getNotebookIdMap(response.data);
+      this.multiSelectManager.setNotebookIdMap(idMap);
+    }
+    
     this.syncHomepageTimers();
   }
 
@@ -102,12 +127,10 @@ class HomepageTimerInjector {
 
   private syncHomepageTimers(): void {
     if (!this.latestDashboardState) {
-      srsLog("[DEBUG] syncHomepageTimers: no dashboard state, skipping");
       return;
     }
 
     if (location.pathname !== "/") {
-      srsLog("[DEBUG] syncHomepageTimers: not on homepage (pathname =", location.pathname + "), skipping");
       return;
     }
 
@@ -230,7 +253,7 @@ class StudioRefreshButtonInjector {
     for (const card of cards) {
       if (card.querySelector("[data-srs-refresh]")) continue;
 
-      const actionsContainer = card.querySelector(".artifact-actions");
+      const actionsContainer = card.querySelector<HTMLElement>(".artifact-actions");
       if (!actionsContainer) continue;
 
       // Normalize spacing on all buttons in the container
@@ -304,14 +327,12 @@ class StudioRefreshButtonInjector {
       },
     });
 
-    srsLog("[DEBUG] activity.completed response:", JSON.stringify(response));
     if (response.ok) {
       srsLog("refresh success", { artifactTitle, activityType });
       btn.textContent = "✓";
       btn.style.color = "#15803d";
       
       if (this.homepageInjector) {
-        srsLog("[DEBUG] calling homepageInjector.refresh() after activity.completed");
         await this.homepageInjector.refresh();
       }
       

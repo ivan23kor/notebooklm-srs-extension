@@ -1,0 +1,35 @@
+page-bridge.js:3 [Page-Bridge] Injected into MAIN world
+page-bridge.js:82 [Page-Bridge] [XHR] Request to: /_/LabsTailwindUi/data/batchexecute?rpcids=ZwVcOc&source-path=%2F&bl=boq_labs-tailwind-frontend_2026
+page-bridge.js:83 [Page-Bridge] [XHR] Hooked batchexecute request
+page-bridge.js:82 [Page-Bridge] [XHR] Request to: /_/LabsTailwindUi/data/batchexecute?rpcids=wXbhsf&source-path=%2F&bl=boq_labs-tailwind-frontend_2026
+page-bridge.js:83 [Page-Bridge] [XHR] Hooked batchexecute request
+page-bridge.js:82 [Page-Bridge] [XHR] Request to: /_/LabsTailwindUi/data/batchexecute?rpcids=ub2Bae&source-path=%2F&bl=boq_labs-tailwind-frontend_2026
+page-bridge.js:83 [Page-Bridge] [XHR] Hooked batchexecute request
+m=_b:410 [Violation] 'setTimeout' handler took 53ms
+page-bridge.js:82 [Page-Bridge] [XHR] Request to: /_/LabsTailwindUi/data/batchexecute?rpcids=ozz5Z&source-path=%2F&bl=boq_labs-tailwind-frontend_20260
+page-bridge.js:83 [Page-Bridge] [XHR] Hooked batchexecute request
+page-bridge.js:86 [Page-Bridge] [XHR] Response received, length: 242
+page-bridge.js:23 [Page-Bridge] [Parse] Response has 7 lines
+page-bridge.js:35 [Page-Bridge] [Parse] Parsed 2 JSON arrays, found 1 notebooks
+page-bridge.js:37 [Page-Bridge] Discovered 1 notebook(s) from XHR, total map size: 1
+page-bridge.js:14 [Page-Bridge] [Dispatch] Sending 1 notebooks: 
+[{…}]
+content.js:786 [SRS] init https://notebooklm.google.com/
+page-bridge.js:86 [Page-Bridge] [XHR] Response received, length: 1141
+page-bridge.js:23 [Page-Bridge] [Parse] Response has 7 lines
+page-bridge.js:35 [Page-Bridge] [Parse] Parsed 2 JSON arrays, found 0 notebooks
+page-bridge.js:86 [Page-Bridge] [XHR] Response received, length: 168812
+page-bridge.js:23 [Page-Bridge] [Parse] Response has 9 lines
+page-bridge.js:35 [Page-Bridge] [Parse] Parsed 3 JSON arrays, found 0 notebooks
+page-bridge.js:86 [Page-Bridge] [XHR] Response received, length: 315990
+page-bridge.js:23 [Page-Bridge] [Parse] Response has 9 lines
+page-bridge.js:35 [Page-Bridge] [Parse] Parsed 3 JSON arrays, found 0 notebooks
+content.js:98 [Multi-Select] Initializing multi-select manager
+page-bridge.js:14 [Page-Bridge] [Dispatch] Sending 1 notebooks: 
+[{…}]
+page-bridge.js:15 [SRS] Received 1 notebook IDs from page bridge
+page-bridge.js:15 [Multi-Select] Merged 1 discovered notebook IDs, map size: 1
+page-bridge.js:15 [Multi-Select] Retrying 0 unresolved rows
+content.js:786 [SRS] studio injector started
+content.js:786 [SRS] ready
+m=_b:410 [Violation] 'setTimeout' handler took 158ms
